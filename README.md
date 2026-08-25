@@ -28,12 +28,15 @@ Chrome extension (Manifest V3).
 | Clear all | Trash button (undoable) |
 | Save snapshot | Camera button — saves a PNG to `Downloads/Chalk/` |
 | Exit | **Esc** or the ✕ button |
+| Expand / collapse the toolbar | The **⋯** button |
 
-The toolbar is a paper strip taped to the page — drag it anywhere by the tape
-or any empty spot on the strip; its position is remembered. A handwritten
-caption under the strip names the active tool and colour. Keyboard shortcuts
-work but are not shown on the strip. The **interact** tool (V)
-lets pointer events fall through to the page, so you can scroll and click
+The toolbar starts compressed — interact, pen and eraser only — and the **⋯**
+button opens the full kit (highlighter, arrow, rectangle, laser, colours,
+undo, clear, snapshot); the mode is remembered. Keyboard shortcuts reach every
+tool either way, and a tool picked while compressed stays visible on the
+strip. Drag the strip anywhere by any empty spot on it; its position is
+remembered. A handwritten caption under the strip names the active tool and
+colour. The **interact** tool (V) lets pointer events fall through to the page, so you can scroll and click
 while your ink stays on screen — drawings are anchored to the page content
 and scroll with it. Annotations survive toggling the mode off and on, but are
 cleared automatically when you navigate to a different page (including SPA
