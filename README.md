@@ -22,17 +22,20 @@ Chrome extension (Manifest V3).
 | Action | How |
 | --- | --- |
 | Toggle drawing mode | Click the Chalk icon, or **Alt+D** (⌥D on Mac) |
-| Tools | **P** pen · **H** highlighter · **A** arrow · **R** rectangle · **E** eraser |
+| Tools | **V** interact · **P** pen · **H** highlighter · **A** arrow · **R** rectangle · **E** eraser |
 | Colors | Click a swatch, or keys **1–5** |
 | Undo / Redo | **Ctrl/⌘+Z** · **Ctrl/⌘+Shift+Z** |
 | Clear all | Trash button (undoable) |
 | Save snapshot | Camera button — saves a PNG to `Downloads/Chalk/` |
 | Exit | **Esc** or the ✕ button |
 
-The floating toolbar can be dragged anywhere by its grip (or any empty spot on
-the bar); its position is remembered. Annotations survive toggling the mode
-off and on, so you can interact with the page mid-explanation and come back
-to your drawings. When drawing mode is off, the page behaves completely
+The floating toolbar can be dragged anywhere by the Chalk logo tile (or any
+empty spot on the bar); its position is remembered. The **interact** tool (V)
+lets pointer events fall through to the page, so you can scroll and click
+while your ink stays on screen — drawings are anchored to the page content
+and scroll with it. Annotations survive toggling the mode off and on, but are
+cleared automatically when you navigate to a different page (including SPA
+route changes). When drawing mode is off, the page behaves completely
 normally.
 
 ## Notes
