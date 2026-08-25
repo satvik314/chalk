@@ -22,7 +22,7 @@ Chrome extension (Manifest V3).
 | Action | How |
 | --- | --- |
 | Toggle drawing mode | Click the Chalk icon, or **Alt+D** (⌥D on Mac) |
-| Tools | **V** interact · **P** pen · **H** highlighter · **A** arrow · **R** rectangle · **E** eraser |
+| Tools | **V** interact · **O** observe (laser) · **P** pen · **H** highlighter · **A** arrow · **R** rectangle · **E** eraser |
 | Colors | Click a swatch, or keys **1–5** |
 | Undo / Redo | **Ctrl/⌘+Z** · **Ctrl/⌘+Shift+Z** |
 | Clear all | Trash button (undoable) |
