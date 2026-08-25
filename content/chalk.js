@@ -48,13 +48,16 @@
   ];
 
   const TOOL_NAMES = {
-    cursor: 'observe',
+    cursor: 'interact',
+    laser: 'observe',
     pen: 'pen',
     highlighter: 'highlighter',
     arrow: 'arrow',
     rect: 'rectangle',
     eraser: 'eraser',
   };
+
+  const LASER = { color: '#c8452f', trailMs: 1200, dotR: 6.5 };
 
   const PEN = { min: 2.0, max: 5.2, start: 3.4 };
   const SIZES = { highlighter: 16, eraser: 30, arrow: 3.5, rect: 3 };
@@ -69,6 +72,10 @@
   let redoStack = [];
   let live = null; // in-progress stroke
   let raf = 0;
+  let laserTrail = []; // recent pointer positions while observing
+  let laserPos = null;
+  let laserBurstT = 0;
+  let laserRaf = 0;
   let dpr = Math.max(1, window.devicePixelRatio || 1);
   let lastPage = location.pathname + location.search;
 
@@ -118,6 +125,7 @@
     arrow: svg(`<path d="M5 19 18.5 5.5"/><path d="M11.5 5.5h7v7"/>`, 1.8),
     rect: svg(`<rect x="4.5" y="6" width="15" height="12.5" rx="2"/>`),
     eraser: svg(`<path d="M8.5 19.5 4 15 13 6l4.5 4.5-9 9Z"/><path d="M8.5 19.5H19"/>`),
+    laser: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="7.2" stroke-width="1.5" stroke-dasharray="2.6 3.2"/></svg>`,
     undo: svg(
       `<path d="M8.5 9H15a4.2 4.2 0 0 1 0 8.4H9"/><path d="M11.5 5.6 7.6 9l3.9 3.4"/>`,
       1.8
@@ -135,6 +143,7 @@
   function cursorFor(theTool) {
     const enc = (s) => `url("data:image/svg+xml,${encodeURIComponent(s)}")`;
     if (theTool === 'cursor') return '';
+    if (theTool === 'laser') return 'none'; // the glowing dot IS the cursor
     if (theTool === 'pen') {
       const s = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="4.6" fill="${color}" stroke="white" stroke-width="1.6"/></svg>`;
       return `${enc(s)} 8 8, crosshair`;
@@ -236,7 +245,8 @@
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
 
-    .strip button {
+    /* direct children only — swatches live inside .swatches and style themselves */
+    .strip > button {
       position: relative;
       appearance: none; border: 0; background: transparent;
       width: 38px; height: 38px;
@@ -250,12 +260,12 @@
         transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1),
         box-shadow 180ms ease;
     }
-    .strip button:hover { background: rgba(16,22,46,.07); color: ${INK}; transform: translateY(-1px); }
-    .strip button:active { transform: scale(0.9); }
-    .strip button svg { width: 24px; height: 24px; display: block; }
+    .strip > button:hover { background: rgba(16,22,46,.07); color: ${INK}; transform: translateY(-1px); }
+    .strip > button:active { transform: scale(0.9); }
+    .strip > button svg { width: 24px; height: 24px; display: block; }
 
     /* active tool: lifted pastel sticker, tinted by the current ink colour */
-    .strip button.on {
+    .strip > button.on {
       background: color-mix(in srgb, var(--ink-color, #c8452f) 26%, ${PAPER});
       border: 2px solid ${INK};
       color: ${INK};
@@ -263,9 +273,10 @@
       box-shadow: 2px 3px 0 rgba(16,22,46,.9);
       width: 42px; height: 42px; border-radius: 8px;
     }
-    .strip button.on:hover { transform: translateY(-8px) rotate(-2.5deg); }
-    .strip button.on svg { animation: chalk-pop 320ms cubic-bezier(0.34, 1.8, 0.5, 1) both; width: 25px; height: 25px; }
-    .strip button.on[data-tool="cursor"] { background: #fdf07f; }
+    .strip > button.on:hover { transform: translateY(-8px) rotate(-2.5deg); }
+    .strip > button.on svg { animation: chalk-pop 320ms cubic-bezier(0.34, 1.8, 0.5, 1) both; width: 25px; height: 25px; }
+    .strip > button.on[data-tool="cursor"] { background: #fdf07f; }
+    .strip > button.on[data-tool="laser"] { background: #f7c9c0; }
     @keyframes chalk-pop {
       0%   { transform: scale(0.7) rotate(-8deg); }
       55%  { transform: scale(1.2) rotate(3deg); }
@@ -282,7 +293,7 @@
     .swatches { display: flex; align-items: center; gap: 9px; padding: 0 3px 8px; }
     .swatch {
       appearance: none; border: 0; padding: 0;
-      width: 23px; height: 23px;
+      width: 23px; height: 23px; flex: none;
       cursor: pointer;
       box-shadow: inset 0 -2px 3px rgba(0,0,0,.18);
       transition: transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 180ms ease;
@@ -301,7 +312,7 @@
     .swatch.on { transform: scale(1.15); }
 
     /* tooltips — names only, paper style */
-    .strip button::after {
+    .strip > button::after {
       content: attr(data-tip);
       position: absolute;
       bottom: calc(100% + 13px); left: 50%;
@@ -318,13 +329,12 @@
       transition: opacity 160ms ease, transform 160ms ease;
       z-index: 5;
     }
-    .strip button:hover::after {
+    .strip > button:hover::after {
       opacity: 1; transform: translate(-50%, 0) rotate(-1deg);
       transition-delay: 480ms;
     }
-    .bar-wrap.tips-below .strip button::after { bottom: auto; top: calc(100% + 13px); }
-    .bar-wrap.dragging .strip button::after { opacity: 0 !important; }
-    .swatch::after { display: none; }
+    .bar-wrap.tips-below .strip > button::after { bottom: auto; top: calc(100% + 13px); }
+    .bar-wrap.dragging .strip > button::after { opacity: 0 !important; }
 
     /* handwritten caption naming the active tool + colour */
     .status {
@@ -402,6 +412,7 @@
           <button data-tool="arrow" data-tip="arrow">${ICONS.arrow}</button>
           <button data-tool="rect" data-tip="rectangle">${ICONS.rect}</button>
           <button data-tool="eraser" data-tip="eraser">${ICONS.eraser}</button>
+          <button data-tool="laser" data-tip="observe">${ICONS.laser}</button>
           <div class="divider"></div>
           <div class="swatches">
             ${COLORS.map(
@@ -725,6 +736,76 @@
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(base, 0, 0);
     if (live && live.tool !== 'eraser') drawOp(ctx, live);
+    if (active && tool === 'laser') drawLaser();
+  }
+
+  // ------------------------------------------------------- observe (laser)
+  // Ephemeral by design: a glowing dot with a fading trail, and a pulsing
+  // ring when parked. Never committed to ops — it points, it doesn't draw.
+  function drawLaser() {
+    const now = performance.now();
+    laserTrail = laserTrail.filter((p) => now - p.t < LASER.trailMs);
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (let i = 1; i < laserTrail.length; i++) {
+      const p = laserTrail[i];
+      const q = laserTrail[i - 1];
+      const life = 1 - (now - p.t) / LASER.trailMs;
+      ctx.strokeStyle = `rgba(200,69,47,${(0.55 * life).toFixed(3)})`;
+      ctx.lineWidth = 1.5 + 6 * life;
+      ctx.beginPath();
+      ctx.moveTo(q.x, q.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+    }
+
+    if (laserPos) {
+      // parked pulse, mirroring the design's 1.6s laser ring
+      const t = (now % 1600) / 1600;
+      const s = (1 - Math.cos(t * Math.PI * 2)) / 2; // 0 → 1 → 0
+      ctx.strokeStyle = `rgba(200,69,47,${(0.85 - 0.5 * s).toFixed(3)})`;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(laserPos.x, laserPos.y, 15 + 7 * s, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const burstAge = now - laserBurstT;
+      if (burstAge < 450) {
+        const k = burstAge / 450;
+        ctx.strokeStyle = `rgba(200,69,47,${(0.65 * (1 - k)).toFixed(3)})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(laserPos.x, laserPos.y, 12 + 46 * k, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.shadowColor = 'rgba(200,69,47,0.85)';
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = LASER.color;
+      ctx.beginPath();
+      ctx.arc(laserPos.x, laserPos.y, LASER.dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function startLaserLoop() {
+    if (laserRaf) return;
+    const loop = () => {
+      if (!active || tool !== 'laser') {
+        laserRaf = 0;
+        laserTrail = [];
+        laserPos = null;
+        render(); // wipe the leftover dot/trail
+        return;
+      }
+      render();
+      laserRaf = requestAnimationFrame(loop);
+    };
+    laserRaf = requestAnimationFrame(loop);
   }
 
   function scheduleRender() {
@@ -770,6 +851,13 @@
   function wireCanvas() {
     canvas.addEventListener('pointerdown', (e) => {
       if (!active || e.button !== 0 || tool === 'cursor') return;
+      if (tool === 'laser') {
+        // a click "taps" the laser — quick expanding ring for emphasis
+        e.preventDefault();
+        laserBurstT = performance.now();
+        laserPos = { x: e.clientX, y: e.clientY };
+        return;
+      }
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
       const p = docPoint(e);
@@ -797,7 +885,17 @@
     });
 
     canvas.addEventListener('pointermove', (e) => {
-      if (!active || !live) return;
+      if (!active) return;
+      if (tool === 'laser') {
+        const now = performance.now();
+        const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+        for (const ev of events.length ? events : [e]) {
+          laserTrail.push({ x: ev.clientX, y: ev.clientY, t: now });
+        }
+        laserPos = { x: e.clientX, y: e.clientY };
+        return; // the laser loop repaints every frame
+      }
+      if (!live) return;
       e.preventDefault();
       const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       for (const ev of events.length ? events : [e]) addLivePoint(ev);
@@ -872,7 +970,8 @@
   // -------------------------------------------------------------- toolbar
   function statusText() {
     const name = TOOL_NAMES[tool] || tool;
-    if (tool === 'cursor') return 'observing — ink stays put';
+    if (tool === 'cursor') return 'interacting — ink stays put';
+    if (tool === 'laser') return 'observe — point at things';
     if (tool === 'eraser') return 'eraser';
     const c = COLORS.find((c) => c.value === color);
     return `${name} · ${c ? c.name : ''}`;
@@ -887,6 +986,7 @@
     canvas.style.pointerEvents = tool === 'cursor' ? 'none' : 'auto';
     canvas.style.cursor = cursorFor(tool);
     statusEl.textContent = statusText();
+    if (tool === 'laser') startLaserLoop();
   }
 
   function reflectColor() {
@@ -1031,7 +1131,7 @@
 
     if (mod || e.altKey) return;
     const k = e.key.toLowerCase();
-    const toolKeys = { v: 'cursor', p: 'pen', h: 'highlighter', a: 'arrow', r: 'rect', e: 'eraser' };
+    const toolKeys = { v: 'cursor', o: 'laser', l: 'laser', p: 'pen', h: 'highlighter', a: 'arrow', r: 'rect', e: 'eraser' };
     if (toolKeys[k]) {
       e.preventDefault();
       e.stopPropagation();
