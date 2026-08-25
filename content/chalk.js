@@ -6,10 +6,11 @@
 // toggle; when inactive the host is display:none and the page behaves
 // exactly as if Chalk weren't installed.
 //
-// Toolbar design: "loud notebook" — a cream paper strip taped to the page
-// with washi tape, perforated bottom edge, navy ink line icons, the active
-// tool lifted on a pastel sticker, blob-shaped swatches, and a handwritten
-// status caption naming the current tool and colour.
+// Toolbar design: "loud notebook" — a compact cream paper strip with a
+// perforated bottom edge, navy ink line icons, the active tool lifted on a
+// pastel sticker, blob-shaped swatches, and a handwritten status caption
+// naming the current tool and colour. It starts compressed (cursor / pen /
+// eraser only) and expands to the full kit on request.
 //
 // Rendering model: committed work lives as vector "ops" (strokes / shapes /
 // eraser paths / clears) replayed onto an offscreen "base" canvas. The
@@ -67,6 +68,7 @@
   let built = false;
   let active = false;
   let tool = 'pen';
+  let compact = true; // start compressed — cursor / pen / eraser only
   let color = COLORS[0].value;
   let ops = [];
   let redoStack = [];
@@ -136,6 +138,8 @@
       1.6
     ),
     close: svg(`<path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/>`, 1.9),
+    more: `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="6" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="18" cy="12" r="1.7"/></svg>`,
+    less: svg(`<path d="M14.5 6.5 9 12l5.5 5.5"/><path d="M20 6.5 14.5 12 20 17.5"/>`, 1.8),
     check: `<svg viewBox="0 0 24 24" fill="none" stroke="#2fb672" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
   };
 
@@ -187,7 +191,7 @@
     .paper {
       position: relative;
       pointer-events: auto;
-      filter: drop-shadow(0 10px 18px rgba(16,22,46,.22));
+      filter: drop-shadow(0 8px 14px rgba(16,22,46,.20));
       cursor: grab;
       animation: chalk-in 420ms cubic-bezier(0.30, 1.35, 0.45, 1) both;
     }
@@ -202,35 +206,21 @@
       to { opacity: 0; transform: translateY(10px) scale(0.97); }
     }
 
-    /* washi tape holding the strip to the page */
-    .tape {
-      position: absolute; top: -13px;
-      width: 76px; height: 26px;
-      opacity: .85;
-      box-shadow: 0 1px 2px rgba(16,22,46,.2);
-      mask-image: repeating-linear-gradient(90deg, #000 0 4px, rgba(0,0,0,.55) 4px 8px);
-      -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 4px, rgba(0,0,0,.55) 4px 8px);
-      pointer-events: none;
-      z-index: 2;
-    }
-    .tape.l { left: 48px; background: linear-gradient(#f6cf7a, #efbe58); transform: rotate(-4deg); }
-    .tape.r { right: 44px; width: 82px; top: -14px; background: linear-gradient(#f3b6c4, #e999ab); transform: rotate(3.5deg); }
-
     /* the paper strip itself, with a perforated bottom edge */
     .strip {
       position: relative;
-      display: flex; align-items: flex-end; gap: 3px;
-      padding: 13px 15px 15px;
+      display: flex; align-items: flex-end; gap: 2px;
+      padding: 10px 12px 12px;
       background: ${PAPER};
       border: 2px solid ${INK};
-      border-radius: 6px;
-      mask-image: radial-gradient(5px 5px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
-      mask-size: 13px 10px, 100% calc(100% - 9px);
+      border-radius: 5px;
+      mask-image: radial-gradient(4px 4px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
+      mask-size: 11px 8px, 100% calc(100% - 7px);
       mask-repeat: repeat-x, no-repeat;
       mask-position: bottom, top;
       mask-composite: add;
-      -webkit-mask-image: radial-gradient(5px 5px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
-      -webkit-mask-size: 13px 10px, 100% calc(100% - 9px);
+      -webkit-mask-image: radial-gradient(4px 4px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
+      -webkit-mask-size: 11px 8px, 100% calc(100% - 7px);
       -webkit-mask-repeat: repeat-x, no-repeat;
       -webkit-mask-position: bottom, top;
       -webkit-mask-composite: source-over;
@@ -249,8 +239,8 @@
     .strip > button {
       position: relative;
       appearance: none; border: 0; background: transparent;
-      width: 38px; height: 38px;
-      border-radius: 7px;
+      width: 32px; height: 32px;
+      border-radius: 6px;
       display: grid; place-items: center;
       color: rgba(16,22,46,.62);
       cursor: pointer;
@@ -262,19 +252,19 @@
     }
     .strip > button:hover { background: rgba(16,22,46,.07); color: ${INK}; transform: translateY(-1px); }
     .strip > button:active { transform: scale(0.9); }
-    .strip > button svg { width: 24px; height: 24px; display: block; }
+    .strip > button svg { width: 20px; height: 20px; display: block; }
 
     /* active tool: lifted pastel sticker, tinted by the current ink colour */
     .strip > button.on {
       background: color-mix(in srgb, var(--ink-color, #c8452f) 26%, ${PAPER});
       border: 2px solid ${INK};
       color: ${INK};
-      transform: translateY(-7px) rotate(-2.5deg);
-      box-shadow: 2px 3px 0 rgba(16,22,46,.9);
-      width: 42px; height: 42px; border-radius: 8px;
+      transform: translateY(-6px) rotate(-2.5deg);
+      box-shadow: 2px 2.5px 0 rgba(16,22,46,.9);
+      width: 35px; height: 35px; border-radius: 7px;
     }
-    .strip > button.on:hover { transform: translateY(-8px) rotate(-2.5deg); }
-    .strip > button.on svg { animation: chalk-pop 320ms cubic-bezier(0.34, 1.8, 0.5, 1) both; width: 25px; height: 25px; }
+    .strip > button.on:hover { transform: translateY(-7px) rotate(-2.5deg); }
+    .strip > button.on svg { animation: chalk-pop 320ms cubic-bezier(0.34, 1.8, 0.5, 1) both; width: 21px; height: 21px; }
     .strip > button.on[data-tool="cursor"] { background: #fdf07f; }
     .strip > button.on[data-tool="laser"] { background: #f7c9c0; }
     @keyframes chalk-pop {
@@ -285,15 +275,15 @@
 
     .divider {
       align-self: stretch; width: 0;
-      margin: 4px 8px;
+      margin: 3px 6px;
       border-left: 2px dotted rgba(16,22,46,.35);
       flex: none;
     }
 
-    .swatches { display: flex; align-items: center; gap: 9px; padding: 0 3px 8px; }
+    .swatches { display: flex; align-items: center; gap: 7px; padding: 0 2px 6px; }
     .swatch {
       appearance: none; border: 0; padding: 0;
-      width: 23px; height: 23px; flex: none;
+      width: 19px; height: 19px; flex: none;
       cursor: pointer;
       box-shadow: inset 0 -2px 3px rgba(0,0,0,.18);
       transition: transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 180ms ease;
@@ -311,20 +301,27 @@
     }
     .swatch.on { transform: scale(1.15); }
 
+    /* compressed mode — only cursor / pen / eraser (plus the active tool,
+       whichever it is, so keyboard shortcuts never point at a hidden button) */
+    .bar-wrap.compact .strip > [data-full] { display: none; }
+    .bar-wrap.compact .strip > button[data-full].on { display: grid; }
+    .bar-wrap.compact [data-act="expand"] .icon-less,
+    .bar-wrap:not(.compact) [data-act="expand"] .icon-more { display: none; }
+
     /* tooltips — names only, paper style */
     .strip > button::after {
       content: attr(data-tip);
       position: absolute;
-      bottom: calc(100% + 13px); left: 50%;
+      bottom: calc(100% + 10px); left: 50%;
       transform: translate(-50%, 3px) rotate(-1deg);
       background: ${PAPER};
       border: 2px solid ${INK};
       color: ${INK};
       font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-      font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+      font-size: 9.5px; font-weight: 600; letter-spacing: .04em;
       line-height: 1; white-space: nowrap;
-      padding: 6px 9px; border-radius: 6px;
-      box-shadow: 2px 3px 0 rgba(16,22,46,.85);
+      padding: 5px 8px; border-radius: 5px;
+      box-shadow: 2px 2.5px 0 rgba(16,22,46,.85);
       opacity: 0; pointer-events: none;
       transition: opacity 160ms ease, transform 160ms ease;
       z-index: 5;
@@ -333,15 +330,15 @@
       opacity: 1; transform: translate(-50%, 0) rotate(-1deg);
       transition-delay: 480ms;
     }
-    .bar-wrap.tips-below .strip > button::after { bottom: auto; top: calc(100% + 13px); }
+    .bar-wrap.tips-below .strip > button::after { bottom: auto; top: calc(100% + 10px); }
     .bar-wrap.dragging .strip > button::after { opacity: 0 !important; }
 
     /* handwritten caption naming the active tool + colour */
     .status {
-      margin-top: 9px;
+      margin-top: 7px;
       pointer-events: none;
       font-family: 'Segoe Print', 'Bradley Hand', 'Marker Felt', 'Comic Sans MS', cursive;
-      font-size: 13px; font-weight: 700;
+      font-size: 11.5px; font-weight: 700;
       color: rgba(16,22,46,.55);
       text-shadow: 0 1px 0 rgba(255,253,242,.7);
       transition: opacity 200ms ease;
@@ -403,27 +400,26 @@
     barWrap.className = 'bar-wrap';
     barWrap.innerHTML = `
       <div class="paper">
-        <div class="tape l"></div>
-        <div class="tape r"></div>
         <div class="strip">
-          <button data-tool="cursor" data-tip="observe">${ICONS.cursor}</button>
+          <button data-tool="cursor" data-tip="interact">${ICONS.cursor}</button>
           <button data-tool="pen" data-tip="pen">${ICONS.pen}</button>
-          <button data-tool="highlighter" data-tip="highlighter">${ICONS.highlighter}</button>
-          <button data-tool="arrow" data-tip="arrow">${ICONS.arrow}</button>
-          <button data-tool="rect" data-tip="rectangle">${ICONS.rect}</button>
+          <button data-tool="highlighter" data-tip="highlighter" data-full>${ICONS.highlighter}</button>
+          <button data-tool="arrow" data-tip="arrow" data-full>${ICONS.arrow}</button>
+          <button data-tool="rect" data-tip="rectangle" data-full>${ICONS.rect}</button>
           <button data-tool="eraser" data-tip="eraser">${ICONS.eraser}</button>
-          <button data-tool="laser" data-tip="observe">${ICONS.laser}</button>
-          <div class="divider"></div>
-          <div class="swatches">
+          <button data-tool="laser" data-tip="observe" data-full>${ICONS.laser}</button>
+          <div class="divider" data-full></div>
+          <div class="swatches" data-full>
             ${COLORS.map(
               (c, i) =>
                 `<button class="swatch" data-color="${c.value}" style="background:${c.value};border-radius:${BLOBS[i]}"></button>`
             ).join('')}
           </div>
           <div class="divider"></div>
-          <button data-act="undo" data-tip="undo">${ICONS.undo}</button>
-          <button data-act="clear" data-tip="clear all">${ICONS.trash}</button>
-          <button data-act="snapshot" data-tip="save snapshot">${ICONS.camera}</button>
+          <button data-act="undo" data-tip="undo" data-full>${ICONS.undo}</button>
+          <button data-act="clear" data-tip="clear all" data-full>${ICONS.trash}</button>
+          <button data-act="snapshot" data-tip="save snapshot" data-full>${ICONS.camera}</button>
+          <button data-act="expand" data-tip="more tools"><span class="icon-more">${ICONS.more}</span><span class="icon-less">${ICONS.less}</span></button>
           <button data-act="close" data-tip="done">${ICONS.close}</button>
         </div>
       </div>
@@ -461,6 +457,7 @@
     if (prefs.tool && strip.querySelector(`[data-tool="${prefs.tool}"]`)) tool = prefs.tool;
     if (prefs.color && COLORS.some((c) => c.value === prefs.color)) color = prefs.color;
     if (tool === 'cursor') tool = 'pen'; // activation means "I want to draw"
+    setCompact(prefs.compact !== false, false);
 
     host.style.display = 'block';
     barWrap.classList.remove('leaving');
@@ -1010,6 +1007,23 @@
     savePrefs({ color: v });
   }
 
+  function setCompact(v, save = true) {
+    // growing/shrinking from the left edge would slide the bar out from under
+    // the pointer, so pin the midpoint and let it change width around that
+    const midBefore = barWrap.style.left
+      ? parseFloat(barWrap.style.left) + barWrap.offsetWidth / 2
+      : null;
+    compact = v;
+    barWrap.classList.toggle('compact', compact);
+    const btn = strip.querySelector('[data-act="expand"]');
+    if (btn) btn.dataset.tip = compact ? 'more tools' : 'fewer tools';
+    if (midBefore !== null) {
+      barWrap.style.left = midBefore - barWrap.offsetWidth / 2 + 'px';
+      clampToolbar(); // the strip just changed width — keep it on screen
+    }
+    if (save) savePrefs({ compact });
+  }
+
   function wireToolbar() {
     strip.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
@@ -1019,6 +1033,7 @@
       else if (btn.dataset.act === 'undo') undo();
       else if (btn.dataset.act === 'clear') clearAll();
       else if (btn.dataset.act === 'snapshot') snapshot();
+      else if (btn.dataset.act === 'expand') setCompact(!compact);
       else if (btn.dataset.act === 'close') deactivate();
     });
     // keep clicks inside the toolbar from ever reaching the page
@@ -1039,10 +1054,10 @@
         y = window.innerHeight - bh - 24;
       }
       x = clamp(x, 8, Math.max(8, window.innerWidth - bw - 8));
-      y = clamp(y, 18, Math.max(18, window.innerHeight - bh - 8));
+      y = clamp(y, 8, Math.max(8, window.innerHeight - bh - 8));
       barWrap.style.left = x + 'px';
       barWrap.style.top = y + 'px';
-      barWrap.classList.toggle('tips-below', y < 72);
+      barWrap.classList.toggle('tips-below', y < 60);
     });
   }
 
@@ -1051,10 +1066,10 @@
     const bw = barWrap.offsetWidth;
     const bh = barWrap.offsetHeight;
     const x = clamp(parseFloat(barWrap.style.left), 8, Math.max(8, window.innerWidth - bw - 8));
-    const y = clamp(parseFloat(barWrap.style.top), 18, Math.max(18, window.innerHeight - bh - 8));
+    const y = clamp(parseFloat(barWrap.style.top), 8, Math.max(8, window.innerHeight - bh - 8));
     barWrap.style.left = x + 'px';
     barWrap.style.top = y + 'px';
-    barWrap.classList.toggle('tips-below', y < 72);
+    barWrap.classList.toggle('tips-below', y < 60);
   }
 
   function wireDrag() {
@@ -1062,7 +1077,7 @@
     let offX = 0;
     let offY = 0;
 
-    // drag by any empty spot on the paper (tape, gaps, dividers) — buttons
+    // drag by any empty spot on the paper (padding, gaps, dividers) — buttons
     // and swatches keep their own behaviour
     paper.addEventListener('pointerdown', (e) => {
       if (e.target.closest('button') || e.button !== 0) return;
@@ -1080,7 +1095,7 @@
       const bw = barWrap.offsetWidth;
       const bh = barWrap.offsetHeight;
       const x = clamp(e.clientX - offX, 8, Math.max(8, window.innerWidth - bw - 8));
-      const y = clamp(e.clientY - offY, 18, Math.max(18, window.innerHeight - bh - 8));
+      const y = clamp(e.clientY - offY, 8, Math.max(8, window.innerHeight - bh - 8));
       barWrap.style.left = x + 'px';
       barWrap.style.top = y + 'px';
     });
@@ -1091,7 +1106,7 @@
       barWrap.classList.remove('dragging');
       const x = parseFloat(barWrap.style.left);
       const y = parseFloat(barWrap.style.top);
-      barWrap.classList.toggle('tips-below', y < 72);
+      barWrap.classList.toggle('tips-below', y < 60);
       savePrefs({ barPos: { x, y } });
     };
     paper.addEventListener('pointerup', endDrag);
