@@ -11,6 +11,11 @@
 // canvas is always base + the in-progress stroke, so highlighter strokes keep
 // a single clean alpha while drawn, undo/redo is exact, and a viewport resize
 // just replays the ops.
+//
+// Coordinates are DOCUMENT space (client + scroll at capture time) and the
+// replay transform subtracts the current scroll, so ink stays anchored to the
+// content it annotates while the page scrolls — which the cursor tool allows
+// without leaving Chalk.
 
 (() => {
   'use strict';
@@ -44,6 +49,7 @@
   let live = null; // in-progress stroke
   let raf = 0;
   let dpr = Math.max(1, window.devicePixelRatio || 1);
+  let lastPage = location.pathname + location.search;
 
   let host, shadow, canvas, ctx, base, bctx;
   let barWrap, bar, toastEl, flashEl;
@@ -83,7 +89,8 @@
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ${extra}>${paths}</svg>`;
 
   const ICONS = {
-    grip: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9.2" cy="6.5" r="1.35"/><circle cx="14.8" cy="6.5" r="1.35"/><circle cx="9.2" cy="12" r="1.35"/><circle cx="14.8" cy="12" r="1.35"/><circle cx="9.2" cy="17.5" r="1.35"/><circle cx="14.8" cy="17.5" r="1.35"/></svg>`,
+    logo: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.7" stroke-linecap="round"><path d="M5.5 18.5c3.5-1.2 8-5.4 13-12.5"/></svg>`,
+    cursor: svg(`<path d="m4 3.5 7.5 17.5 2.6-7.4 7.4-2.6Z"/>`),
     pen: svg(`<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>`),
     highlighter: svg(
       `<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4l8 8Z"/>`
@@ -107,6 +114,7 @@
   // --------------------------------------------------------------- cursors
   function cursorFor(theTool) {
     const enc = (s) => `url("data:image/svg+xml,${encodeURIComponent(s)}")`;
+    if (theTool === 'cursor') return '';
     if (theTool === 'pen') {
       const s = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="4.6" fill="${color}" stroke="white" stroke-width="1.6"/></svg>`;
       return `${enc(s)} 8 8, crosshair`;
@@ -132,6 +140,12 @@
     :host { all: initial; }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
+    @property --chalk-ang {
+      syntax: '<angle>';
+      initial-value: 0deg;
+      inherits: false;
+    }
+
     .layer {
       position: fixed; inset: 0; z-index: 1;
       touch-action: none;
@@ -147,34 +161,84 @@
     }
 
     .bar {
+      position: relative;
       display: flex; align-items: center; gap: 1px;
       padding: 6px;
-      border-radius: 19px;
+      border-radius: 20px;
       background:
         linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0) 42%),
-        rgba(21, 21, 26, 0.78);
+        rgba(21, 21, 26, 0.80);
       backdrop-filter: blur(24px) saturate(1.6);
       -webkit-backdrop-filter: blur(24px) saturate(1.6);
-      border: 1px solid rgba(255,255,255,0.11);
+      border: 1px solid rgba(255,255,255,0.10);
       box-shadow:
-        0 16px 44px rgba(0,0,0,0.38),
+        0 16px 44px rgba(0,0,0,0.40),
         0 3px 10px rgba(0,0,0,0.28),
+        0 0 34px rgba(124, 92, 255, 0.16),
         inset 0 1px 0 rgba(255,255,255,0.07);
-      animation: chalk-in 380ms cubic-bezier(0.32, 1.42, 0.45, 1) both;
+      animation: chalk-in 420ms cubic-bezier(0.30, 1.44, 0.42, 1) both;
     }
-    .bar-wrap.leaving .bar {
-      animation: chalk-out 150ms ease-in both;
+
+    /* aurora ring: a slowly-orbiting gradient hairline around the pill */
+    .bar::before {
+      content: '';
+      position: absolute; inset: -1px;
+      border-radius: 21px;
+      padding: 1.8px;
+      background: conic-gradient(from var(--chalk-ang, 0deg),
+        rgba(124, 92, 255, 0)    0%,
+        rgba(139, 108, 255, 1)   12%,
+        rgba(255, 110, 199, 0.95) 26%,
+        rgba(255, 178, 36, 0.7)  38%,
+        rgba(124, 92, 255, 0)    52%,
+        rgba(61, 157, 246, 0)    68%,
+        rgba(61, 157, 246, 0.55) 80%,
+        rgba(124, 92, 255, 0)    94%);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      animation: chalk-orbit 7s linear infinite;
+      pointer-events: none;
     }
+    @keyframes chalk-orbit { to { --chalk-ang: 360deg; } }
+
+    .bar-wrap.leaving .bar { animation: chalk-out 150ms ease-in both; }
     .bar-wrap.dragging .bar { transition: none; }
     .bar-wrap.capture-hide { visibility: hidden; }
 
     @keyframes chalk-in {
-      from { opacity: 0; transform: translateY(14px) scale(0.92); }
+      from { opacity: 0; transform: translateY(16px) scale(0.90); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
     @keyframes chalk-out {
       to { opacity: 0; transform: translateY(8px) scale(0.96); }
     }
+
+    /* staggered pop-in of the bar's contents on each activation */
+    .bar-wrap.enter .bar > * {
+      animation: chalk-item-in 360ms cubic-bezier(0.34, 1.6, 0.5, 1) both;
+      animation-delay: calc(var(--i, 0) * 20ms + 60ms);
+    }
+    @keyframes chalk-item-in {
+      from { opacity: 0; transform: translateY(7px) scale(0.6); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .logo {
+      width: 29px; height: 29px;
+      margin: 2px 6px 2px 3px;
+      border-radius: 50%;
+      display: grid; place-items: center;
+      background: linear-gradient(135deg, #8D70FF 20%, #B96BF5 65%, #FF6EC7);
+      box-shadow: 0 2px 12px rgba(154, 92, 255, 0.55), inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -2px 4px rgba(0,0,0,0.15);
+      cursor: grab;
+      flex: none;
+      transition: transform 200ms cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 200ms ease;
+    }
+    .logo:hover { transform: scale(1.1) rotate(-6deg); box-shadow: 0 3px 18px rgba(154,92,255,0.7), inset 0 1px 0 rgba(255,255,255,0.35); }
+    .logo svg { width: 17px; height: 17px; display: block; }
+    .bar-wrap.dragging .logo, .bar-wrap.dragging .bar { cursor: grabbing; }
 
     .bar button {
       position: relative;
@@ -190,7 +254,7 @@
         box-shadow 200ms ease,
         transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1);
     }
-    .bar button:hover { background: rgba(255,255,255,0.085); color: #fff; }
+    .bar button:hover { background: rgba(255,255,255,0.085); color: #fff; transform: translateY(-1px); }
     .bar button:active { transform: scale(0.90); }
     .bar button svg { width: 18px; height: 18px; display: block; }
 
@@ -198,24 +262,16 @@
       background: linear-gradient(180deg, #8D70FF, #6C4DF2);
       color: #fff;
       box-shadow:
-        0 2px 12px rgba(124, 92, 255, 0.50),
+        0 2px 14px rgba(124, 92, 255, 0.55),
         inset 0 1px 0 rgba(255,255,255,0.28);
     }
-    .bar button.on:hover { background: linear-gradient(180deg, #9379FF, #7354F6); }
-    .bar button.on svg { transform: scale(1.06); }
-
-    .grip {
-      width: 22px; height: 34px;
-      display: grid; place-items: center;
-      color: rgba(238,238,246,0.30);
-      cursor: grab;
-      border-radius: 10px;
-      transition: color 150ms ease;
-      margin-right: 1px;
+    .bar button.on:hover { background: linear-gradient(180deg, #9379FF, #7354F6); transform: none; }
+    .bar button.on svg { animation: chalk-pop 340ms cubic-bezier(0.34, 1.8, 0.5, 1) both; }
+    @keyframes chalk-pop {
+      0%   { transform: scale(0.7) rotate(-8deg); }
+      55%  { transform: scale(1.22) rotate(3deg); }
+      100% { transform: scale(1.06) rotate(0deg); }
     }
-    .grip:hover { color: rgba(238,238,246,0.6); }
-    .bar-wrap.dragging .grip, .bar-wrap.dragging .bar { cursor: grabbing; }
-    .grip svg { width: 17px; height: 17px; }
 
     .divider {
       width: 1px; height: 21px;
@@ -237,11 +293,17 @@
     .swatch:hover { transform: scale(1.22); }
     .swatch:active { transform: scale(1.02); }
     .swatch.on {
-      transform: scale(1.05);
+      animation: chalk-drop 380ms cubic-bezier(0.34, 1.7, 0.5, 1) both;
       box-shadow:
         inset 0 0 0 1.2px rgba(255,255,255,0.25),
         0 0 0 2px rgba(21,21,26,0.95),
-        0 0 0 3.6px var(--sw);
+        0 0 0 3.6px var(--sw),
+        0 0 14px var(--sw);
+    }
+    @keyframes chalk-drop {
+      0%   { transform: scale(1); }
+      55%  { transform: scale(1.35); }
+      100% { transform: scale(1.05); }
     }
 
     /* tooltips */
@@ -301,6 +363,18 @@
     if (built) return;
     built = true;
 
+    // @property inside a shadow stylesheet doesn't register the custom
+    // property, which would leave the aurora ring's conic-gradient invalid —
+    // register it document-wide so the angle actually interpolates
+    try {
+      CSS.registerProperty({
+        name: '--chalk-ang',
+        syntax: '<angle>',
+        initialValue: '0deg',
+        inherits: false,
+      });
+    } catch {} // already registered, or unsupported — the 0deg fallback holds
+
     host = document.createElement('chalk-overlay');
     host.style.cssText = `position:fixed;inset:0;z-index:${Z_INDEX};display:none;pointer-events:none;`;
     shadow = host.attachShadow({ mode: 'closed' });
@@ -326,7 +400,8 @@
     barWrap.className = 'bar-wrap';
     barWrap.innerHTML = `
       <div class="bar" part="bar">
-        <div class="grip" title="">${ICONS.grip}</div>
+        <div class="logo" title="">${ICONS.logo}</div>
+        <button data-tool="cursor" data-tip="Interact · V">${ICONS.cursor}</button>
         <button data-tool="pen" data-tip="Pen · P">${ICONS.pen}</button>
         <button data-tool="highlighter" data-tip="Highlighter · H">${ICONS.highlighter}</button>
         <button data-tool="arrow" data-tip="Arrow · A">${ICONS.arrow}</button>
@@ -348,6 +423,8 @@
       </div>`;
     shadow.appendChild(barWrap);
     bar = barWrap.querySelector('.bar');
+    // stagger indices for the entrance animation
+    Array.from(bar.children).forEach((el, i) => el.style.setProperty('--i', i));
 
     toastEl = document.createElement('div');
     toastEl.className = 'toast';
@@ -359,7 +436,9 @@
     wireCanvas();
     wireDrag();
     window.addEventListener('resize', onResize);
+    window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('keydown', onKeyDown, true);
+    watchPageChanges();
   }
 
   // ------------------------------------------------------------- lifecycle
@@ -372,13 +451,16 @@
     const prefs = await loadPrefs();
     if (prefs.tool && bar.querySelector(`[data-tool="${prefs.tool}"]`)) tool = prefs.tool;
     if (prefs.color && COLORS.some((c) => c.value === prefs.color)) color = prefs.color;
+    if (tool === 'cursor') tool = 'pen'; // activation means "I want to draw"
 
     host.style.display = 'block';
     barWrap.classList.remove('leaving');
-    // retrigger the entrance animation
+    // retrigger the entrance animations
+    barWrap.classList.remove('enter');
     bar.style.animation = 'none';
     void bar.offsetWidth;
     bar.style.animation = '';
+    barWrap.classList.add('enter');
 
     reflectTool();
     reflectColor();
@@ -412,6 +494,27 @@
     return active;
   }
 
+  // ---------------------------------------------------- page-change watcher
+  // A full navigation resets this script anyway; this catches SPA route
+  // changes (history API) so drawings from one "page" never haunt the next.
+  function watchPageChanges() {
+    const check = () => {
+      const page = location.pathname + location.search;
+      if (page === lastPage) return;
+      lastPage = page;
+      if (ops.length || live) {
+        live = null;
+        ops = [];
+        redoStack = [];
+        rebuildBase();
+        render();
+        if (active) toast(`<span>New page — drawings cleared</span>`);
+      }
+    };
+    window.addEventListener('popstate', check);
+    setInterval(check, 600); // pushState from the page world is invisible here
+  }
+
   // ------------------------------------------------------------ canvas mgmt
   function ensureCanvasSize() {
     dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -441,10 +544,29 @@
     });
   }
 
+  let scrollRaf = 0;
+  function onScroll() {
+    if (!built || !active) return;
+    cancelAnimationFrame(scrollRaf);
+    scrollRaf = requestAnimationFrame(() => {
+      rebuildBase();
+      render();
+    });
+  }
+
   // ------------------------------------------------------------- draw ops
+  // Ops are stored in document coordinates; this maps them to the viewport.
+  function xform(c) {
+    c.setTransform(dpr, 0, 0, dpr, -window.scrollX * dpr, -window.scrollY * dpr);
+  }
+
+  function docPoint(e) {
+    return { x: e.clientX + window.scrollX, y: e.clientY + window.scrollY };
+  }
+
   function drawOp(c, op) {
     c.save();
-    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    xform(c);
     c.lineCap = 'round';
     c.lineJoin = 'round';
 
@@ -595,6 +717,9 @@
     bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.clearRect(0, 0, base.width, base.height);
     for (const op of ops) drawOp(bctx, op);
+    // a live eraser stroke has already hit the base; re-apply it so a
+    // mid-stroke scroll or resize doesn't resurrect erased ink
+    if (live && live.tool === 'eraser') drawOp(bctx, live);
   }
 
   function render() {
@@ -646,10 +771,10 @@
   // -------------------------------------------------------------- pointer
   function wireCanvas() {
     canvas.addEventListener('pointerdown', (e) => {
-      if (!active || e.button !== 0) return;
+      if (!active || e.button !== 0 || tool === 'cursor') return;
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      const p = { x: e.clientX, y: e.clientY };
+      const p = docPoint(e);
 
       if (tool === 'pen') {
         live = {
@@ -662,7 +787,7 @@
       } else if (tool === 'eraser') {
         live = { tool, size: SIZES.eraser, points: [{ ...p }] };
         bctx.save();
-        bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        xform(bctx);
         bctx.lineCap = 'round';
         bctx.lineJoin = 'round';
         drawEraserPath(bctx, live, 0);
@@ -702,8 +827,7 @@
   }
 
   function addLivePoint(e) {
-    const x = e.clientX;
-    const y = e.clientY;
+    const { x, y } = docPoint(e);
     if (live.tool === 'pen') {
       const pts = live.points;
       const prev = pts[pts.length - 1];
@@ -725,7 +849,7 @@
       const from = live.points.length;
       live.points.push({ x, y });
       bctx.save();
-      bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      xform(bctx);
       bctx.lineCap = 'round';
       bctx.lineJoin = 'round';
       drawEraserPath(bctx, live, from);
@@ -752,6 +876,9 @@
     for (const b of bar.querySelectorAll('[data-tool]')) {
       b.classList.toggle('on', b.dataset.tool === tool);
     }
+    // the cursor tool lets pointer events fall through to the page, so the
+    // teacher can scroll and click while the ink stays on screen
+    canvas.style.pointerEvents = tool === 'cursor' ? 'none' : 'auto';
     canvas.style.cursor = cursorFor(tool);
   }
 
@@ -765,7 +892,7 @@
   function setTool(t) {
     tool = t;
     reflectTool();
-    savePrefs({ tool: t });
+    if (t !== 'cursor') savePrefs({ tool: t }); // never wake up in cursor mode
   }
 
   function setColor(v) {
@@ -827,7 +954,7 @@
     let offY = 0;
 
     bar.addEventListener('pointerdown', (e) => {
-      const onGrip = e.target.closest('.grip');
+      const onGrip = e.target.closest('.logo');
       const onControl = e.target.closest('button');
       if (!onGrip && (onControl || !e.target.closest('.bar'))) return;
       if (e.button !== 0) return;
@@ -880,6 +1007,7 @@
       deactivate();
       return;
     }
+    if (isEditable(document.activeElement)) return; // typing in the page (cursor mode)
     if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       e.stopPropagation();
@@ -893,9 +1021,9 @@
       return;
     }
 
-    if (mod || e.altKey || isEditable(document.activeElement)) return;
+    if (mod || e.altKey) return;
     const k = e.key.toLowerCase();
-    const toolKeys = { p: 'pen', h: 'highlighter', a: 'arrow', r: 'rect', e: 'eraser' };
+    const toolKeys = { v: 'cursor', p: 'pen', h: 'highlighter', a: 'arrow', r: 'rect', e: 'eraser' };
     if (toolKeys[k]) {
       e.preventDefault();
       e.stopPropagation();
