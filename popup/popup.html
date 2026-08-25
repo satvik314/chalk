@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main id="app">
+    <header class="head">
+      <img src="../icons/icon-48.png" alt="" width="30" height="30" class="mark" />
+      <div class="titles">
+        <h1>Chalk</h1>
+        <p class="sub">Draw over anything while you teach</p>
+      </div>
+    </header>
+
+    <!-- default: quick reference -->
+    <section id="state-default" class="card" hidden>
+      <div class="row">
+        <span class="row-label">Toggle drawing</span>
+        <span class="keys" id="shortcut-keys"></span>
+      </div>
+      <div class="row">
+        <span class="row-label">Tools</span>
+        <span class="keys"><kbd>P</kbd><kbd>H</kbd><kbd>A</kbd><kbd>R</kbd><kbd>E</kbd></span>
+      </div>
+      <div class="row">
+        <span class="row-label">Undo · Exit</span>
+        <span class="keys"><kbd id="mod-key"></kbd><kbd>Z</kbd><span class="dot">·</span><kbd>Esc</kbd></span>
+      </div>
+      <button id="start" class="btn primary">Start drawing</button>
+    </section>
+
+    <!-- file:// without access -->
+    <section id="state-file" class="card" hidden>
+      <h2>One quick step for local files</h2>
+      <p class="copy">
+        Chrome needs a one-time permission before Chalk can draw on
+        <code>file://</code> pages like this one.
+      </p>
+      <ol class="steps">
+        <li>Open Chalk’s extension settings</li>
+        <li>Turn on <strong>“Allow access to file URLs”</strong></li>
+        <li>Reload this page, then press <span class="inline-keys" id="shortcut-inline"></span></li>
+      </ol>
+      <button id="open-settings" class="btn primary">Open extension settings</button>
+      <p class="fineprint">Opens <code>chrome://extensions</code> — Chalk’s card is highlighted for you.</p>
+    </section>
+
+    <!-- restricted chrome pages -->
+    <section id="state-restricted" class="card" hidden>
+      <h2>Chrome reserves this page</h2>
+      <p class="copy">
+        Extensions can’t draw on Chrome’s built-in pages or the Web Store.
+        Switch to any website or local file and press
+        <span class="inline-keys" id="shortcut-inline-2"></span>.
+      </p>
+    </section>
+
+    <footer class="foot">
+      <span>Drag the toolbar anywhere</span>
+      <span class="dot">·</span>
+      <span>Snapshots save as PNG</span>
+    </footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

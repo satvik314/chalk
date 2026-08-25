@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Chalk",
+  "version": "1.0.0",
+  "description": "Draw over any webpage while you teach. Pen, highlighter, arrows and shapes on a transparent overlay — toggle with Alt+D.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "scripting", "storage", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Chalk — toggle drawing (Alt+D)",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "commands": {
+    "toggle-annotation": {
+      "suggested_key": {
+        "default": "Alt+D"
+      },
+      "description": "Toggle Chalk drawing mode"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*", "file:///*"],
+      "js": ["content/chalk.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
