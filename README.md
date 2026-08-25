@@ -29,8 +29,10 @@ Chrome extension (Manifest V3).
 | Save snapshot | Camera button — saves a PNG to `Downloads/Chalk/` |
 | Exit | **Esc** or the ✕ button |
 
-The floating toolbar can be dragged anywhere by the Chalk logo tile (or any
-empty spot on the bar); its position is remembered. The **interact** tool (V)
+The toolbar is a paper strip taped to the page — drag it anywhere by the tape
+or any empty spot on the strip; its position is remembered. A handwritten
+caption under the strip names the active tool and colour. Keyboard shortcuts
+work but are not shown on the strip. The **interact** tool (V)
 lets pointer events fall through to the page, so you can scroll and click
 while your ink stays on screen — drawings are anchored to the page content
 and scroll with it. Annotations survive toggling the mode off and on, but are

@@ -1,39 +1,60 @@
 // Chalk — content script.
 //
 // Owns the annotation overlay for one tab: a full-viewport canvas plus a
-// draggable frosted-glass toolbar, both inside a closed shadow root so page
-// styles can't leak in (and ours can't leak out). Everything is dormant until
-// the first toggle; when inactive the host is display:none and the page
-// behaves exactly as if Chalk weren't installed.
+// draggable toolbar, both inside a closed shadow root so page styles can't
+// leak in (and ours can't leak out). Everything is dormant until the first
+// toggle; when inactive the host is display:none and the page behaves
+// exactly as if Chalk weren't installed.
+//
+// Toolbar design: "loud notebook" — a cream paper strip taped to the page
+// with washi tape, perforated bottom edge, navy ink line icons, the active
+// tool lifted on a pastel sticker, blob-shaped swatches, and a handwritten
+// status caption naming the current tool and colour.
 //
 // Rendering model: committed work lives as vector "ops" (strokes / shapes /
-// eraser paths / clears) replayed onto an offscreen "base" canvas. The visible
-// canvas is always base + the in-progress stroke, so highlighter strokes keep
-// a single clean alpha while drawn, undo/redo is exact, and a viewport resize
-// just replays the ops.
+// eraser paths / clears) replayed onto an offscreen "base" canvas. The
+// visible canvas is always base + the in-progress stroke, so highlighter
+// strokes keep a single clean alpha while drawn, undo/redo is exact, and a
+// viewport resize just replays the ops.
 //
 // Coordinates are DOCUMENT space (client + scroll at capture time) and the
-// replay transform subtracts the current scroll, so ink stays anchored to the
-// content it annotates while the page scrolls — which the cursor tool allows
-// without leaving Chalk.
+// replay transform subtracts the current scroll, so ink stays anchored to
+// the content it annotates while the page scrolls — which the observe tool
+// allows without leaving Chalk.
 
 (() => {
   'use strict';
   if (window.__chalkLoaded) return;
   window.__chalkLoaded = true;
 
-  const ACCENT = '#7C5CFF';
+  const INK = '#10162e'; // notebook navy — icons, borders, badge
+  const PAPER = '#fffdf2';
   const Z_INDEX = '2147483646';
-  const IS_MAC = /Mac|iP/.test(navigator.platform);
-  const MOD_LABEL = IS_MAC ? '⌘' : 'Ctrl+';
 
   const COLORS = [
-    { name: 'Crimson', value: '#FF4757' },
-    { name: 'Amber', value: '#FFB224' },
-    { name: 'Mint', value: '#2ED573' },
-    { name: 'Sky', value: '#3D9DF6' },
-    { name: 'Chalk', value: '#F4F4F2' },
+    { name: 'brick', value: '#c8452f' },
+    { name: 'amber', value: '#f0a92e' },
+    { name: 'green', value: '#2fb672' },
+    { name: 'blue', value: '#3b7ff2' },
+    { name: 'ink', value: '#10162e' },
   ];
+  // each swatch gets its own wonky, hand-cut blob shape
+  const BLOBS = [
+    '60% 40% 55% 45%/50% 55% 45% 50%',
+    '45% 55% 40% 60%/55% 45% 55% 45%',
+    '55% 45% 50% 50%/45% 55% 45% 55%',
+    '50% 50% 45% 55%/55% 45% 55% 45%',
+    '48% 52% 55% 45%/52% 48% 52% 48%',
+  ];
+
+  const TOOL_NAMES = {
+    cursor: 'observe',
+    pen: 'pen',
+    highlighter: 'highlighter',
+    arrow: 'arrow',
+    rect: 'rectangle',
+    eraser: 'eraser',
+  };
 
   const PEN = { min: 2.0, max: 5.2, start: 3.4 };
   const SIZES = { highlighter: 16, eraser: 30, arrow: 3.5, rect: 3 };
@@ -52,7 +73,7 @@
   let lastPage = location.pathname + location.search;
 
   let host, shadow, canvas, ctx, base, bctx;
-  let barWrap, bar, toastEl, flashEl;
+  let barWrap, paper, strip, statusEl, toastEl, flashEl;
   let toastTimer = 0;
 
   // ------------------------------------------------------------- utilities
@@ -84,31 +105,30 @@
     });
   }
 
-  // ---------------------------------------------------------------- icons
-  const svg = (paths, extra = '') =>
-    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" ${extra}>${paths}</svg>`;
+  // ------------------------------------------------------- icons (1a set)
+  const svg = (paths, w = 1.7) =>
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
 
   const ICONS = {
-    logo: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.7" stroke-linecap="round"><path d="M5.5 18.5c3.5-1.2 8-5.4 13-12.5"/></svg>`,
-    cursor: svg(`<path d="m4 3.5 7.5 17.5 2.6-7.4 7.4-2.6Z"/>`),
-    pen: svg(`<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>`),
+    cursor: svg(`<path d="M6 3.5 19 12.5 12.6 13.4 10.2 20.5Z"/>`),
+    pen: svg(`<path d="M4.5 19.5 7.5 18.8 19 7.3 16.7 5 5.2 16.5Z"/><path d="M14.9 6.8 17.2 9.1"/>`),
     highlighter: svg(
-      `<path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4l8 8Z"/>`
+      `<path d="M5 17.2 9.4 17.2 18.6 8 15.8 5.2 6.6 14.4Z"/><path d="M4 20.5h9" stroke-width="2.6"/>`
     ),
-    arrow: svg(`<line x1="6" y1="18" x2="17" y2="7"/><polyline points="9 7 17 7 17 15"/>`),
-    rect: svg(`<rect x="3.5" y="5" width="17" height="14" rx="2.2"/>`),
-    eraser: svg(
-      `<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>`
+    arrow: svg(`<path d="M5 19 18.5 5.5"/><path d="M11.5 5.5h7v7"/>`, 1.8),
+    rect: svg(`<rect x="4.5" y="6" width="15" height="12.5" rx="2"/>`),
+    eraser: svg(`<path d="M8.5 19.5 4 15 13 6l4.5 4.5-9 9Z"/><path d="M8.5 19.5H19"/>`),
+    undo: svg(
+      `<path d="M8.5 9H15a4.2 4.2 0 0 1 0 8.4H9"/><path d="M11.5 5.6 7.6 9l3.9 3.4"/>`,
+      1.8
     ),
-    undo: svg(`<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>`),
-    trash: svg(
-      `<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>`
-    ),
+    trash: svg(`<path d="M6 7.5h12M9.5 7.5V5.5h5v2M7.5 7.5 8.4 19h7.2l.9-11.5"/>`),
     camera: svg(
-      `<path d="M14.5 4h-5L7.5 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3.5L14.5 4Z"/><circle cx="12" cy="13" r="3"/>`
+      `<path d="M3.5 8.5h4l1.4-2h6.2l1.4 2h4v10h-17Z"/><circle cx="12" cy="13" r="3.3"/>`,
+      1.6
     ),
-    close: svg(`<line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>`),
-    check: `<svg viewBox="0 0 24 24" fill="none" stroke="${ACCENT}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
+    close: svg(`<path d="M6.5 6.5 17.5 17.5M17.5 6.5 6.5 17.5"/>`, 1.9),
+    check: `<svg viewBox="0 0 24 24" fill="none" stroke="#2fb672" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
   };
 
   // --------------------------------------------------------------- cursors
@@ -140,12 +160,6 @@
     :host { all: initial; }
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
-    @property --chalk-ang {
-      syntax: '<angle>';
-      initial-value: 0deg;
-      inherits: false;
-    }
-
     .layer {
       position: fixed; inset: 0; z-index: 1;
       touch-action: none;
@@ -154,202 +168,193 @@
 
     .bar-wrap {
       position: fixed; z-index: 3;
-      pointer-events: auto;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, Helvetica, Arial, sans-serif;
-      font-synthesis: none;
+      pointer-events: none;
+      display: flex; flex-direction: column; align-items: center;
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
       -webkit-font-smoothing: antialiased;
     }
-
-    .bar {
-      position: relative;
-      display: flex; align-items: center; gap: 1px;
-      padding: 6px;
-      border-radius: 20px;
-      background:
-        linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0) 42%),
-        rgba(21, 21, 26, 0.80);
-      backdrop-filter: blur(24px) saturate(1.6);
-      -webkit-backdrop-filter: blur(24px) saturate(1.6);
-      border: 1px solid rgba(255,255,255,0.10);
-      box-shadow:
-        0 16px 44px rgba(0,0,0,0.40),
-        0 3px 10px rgba(0,0,0,0.28),
-        0 0 34px rgba(124, 92, 255, 0.16),
-        inset 0 1px 0 rgba(255,255,255,0.07);
-      animation: chalk-in 420ms cubic-bezier(0.30, 1.44, 0.42, 1) both;
-    }
-
-    /* aurora ring: a slowly-orbiting gradient hairline around the pill */
-    .bar::before {
-      content: '';
-      position: absolute; inset: -1px;
-      border-radius: 21px;
-      padding: 1.8px;
-      background: conic-gradient(from var(--chalk-ang, 0deg),
-        rgba(124, 92, 255, 0)    0%,
-        rgba(139, 108, 255, 1)   12%,
-        rgba(255, 110, 199, 0.95) 26%,
-        rgba(255, 178, 36, 0.7)  38%,
-        rgba(124, 92, 255, 0)    52%,
-        rgba(61, 157, 246, 0)    68%,
-        rgba(61, 157, 246, 0.55) 80%,
-        rgba(124, 92, 255, 0)    94%);
-      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor;
-      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      mask-composite: exclude;
-      animation: chalk-orbit 7s linear infinite;
-      pointer-events: none;
-    }
-    @keyframes chalk-orbit { to { --chalk-ang: 360deg; } }
-
-    .bar-wrap.leaving .bar { animation: chalk-out 150ms ease-in both; }
-    .bar-wrap.dragging .bar { transition: none; }
     .bar-wrap.capture-hide { visibility: hidden; }
 
+    .paper {
+      position: relative;
+      pointer-events: auto;
+      filter: drop-shadow(0 10px 18px rgba(16,22,46,.22));
+      cursor: grab;
+      animation: chalk-in 420ms cubic-bezier(0.30, 1.35, 0.45, 1) both;
+    }
+    .bar-wrap.dragging .paper { cursor: grabbing; }
+    .bar-wrap.leaving .paper { animation: chalk-out 150ms ease-in both; }
+
     @keyframes chalk-in {
-      from { opacity: 0; transform: translateY(16px) scale(0.90); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
+      from { opacity: 0; transform: translateY(18px) rotate(1.2deg) scale(0.95); }
+      to   { opacity: 1; transform: translateY(0) rotate(0deg) scale(1); }
     }
     @keyframes chalk-out {
-      to { opacity: 0; transform: translateY(8px) scale(0.96); }
+      to { opacity: 0; transform: translateY(10px) scale(0.97); }
     }
 
-    /* staggered pop-in of the bar's contents on each activation */
-    .bar-wrap.enter .bar > * {
-      animation: chalk-item-in 360ms cubic-bezier(0.34, 1.6, 0.5, 1) both;
-      animation-delay: calc(var(--i, 0) * 20ms + 60ms);
+    /* washi tape holding the strip to the page */
+    .tape {
+      position: absolute; top: -13px;
+      width: 76px; height: 26px;
+      opacity: .85;
+      box-shadow: 0 1px 2px rgba(16,22,46,.2);
+      mask-image: repeating-linear-gradient(90deg, #000 0 4px, rgba(0,0,0,.55) 4px 8px);
+      -webkit-mask-image: repeating-linear-gradient(90deg, #000 0 4px, rgba(0,0,0,.55) 4px 8px);
+      pointer-events: none;
+      z-index: 2;
+    }
+    .tape.l { left: 48px; background: linear-gradient(#f6cf7a, #efbe58); transform: rotate(-4deg); }
+    .tape.r { right: 44px; width: 82px; top: -14px; background: linear-gradient(#f3b6c4, #e999ab); transform: rotate(3.5deg); }
+
+    /* the paper strip itself, with a perforated bottom edge */
+    .strip {
+      position: relative;
+      display: flex; align-items: flex-end; gap: 3px;
+      padding: 13px 15px 15px;
+      background: ${PAPER};
+      border: 2px solid ${INK};
+      border-radius: 6px;
+      mask-image: radial-gradient(5px 5px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
+      mask-size: 13px 10px, 100% calc(100% - 9px);
+      mask-repeat: repeat-x, no-repeat;
+      mask-position: bottom, top;
+      mask-composite: add;
+      -webkit-mask-image: radial-gradient(5px 5px at 50% 100%, rgba(0,0,0,0) 98%, #000 100%), linear-gradient(#000,#000);
+      -webkit-mask-size: 13px 10px, 100% calc(100% - 9px);
+      -webkit-mask-repeat: repeat-x, no-repeat;
+      -webkit-mask-position: bottom, top;
+      -webkit-mask-composite: source-over;
+    }
+
+    .bar-wrap.enter .strip > * {
+      animation: chalk-item-in 340ms cubic-bezier(0.34, 1.6, 0.5, 1) both;
+      animation-delay: calc(var(--i, 0) * 18ms + 80ms);
     }
     @keyframes chalk-item-in {
       from { opacity: 0; transform: translateY(7px) scale(0.6); }
       to   { opacity: 1; transform: translateY(0) scale(1); }
     }
 
-    .logo {
-      width: 29px; height: 29px;
-      margin: 2px 6px 2px 3px;
-      border-radius: 50%;
-      display: grid; place-items: center;
-      background: linear-gradient(135deg, #8D70FF 20%, #B96BF5 65%, #FF6EC7);
-      box-shadow: 0 2px 12px rgba(154, 92, 255, 0.55), inset 0 1px 0 rgba(255,255,255,0.35), inset 0 -2px 4px rgba(0,0,0,0.15);
-      cursor: grab;
-      flex: none;
-      transition: transform 200ms cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 200ms ease;
-    }
-    .logo:hover { transform: scale(1.1) rotate(-6deg); box-shadow: 0 3px 18px rgba(154,92,255,0.7), inset 0 1px 0 rgba(255,255,255,0.35); }
-    .logo svg { width: 17px; height: 17px; display: block; }
-    .bar-wrap.dragging .logo, .bar-wrap.dragging .bar { cursor: grabbing; }
-
-    .bar button {
+    .strip button {
       position: relative;
       appearance: none; border: 0; background: transparent;
-      width: 34px; height: 34px;
-      border-radius: 11px;
+      width: 38px; height: 38px;
+      border-radius: 7px;
       display: grid; place-items: center;
-      color: rgba(238, 238, 246, 0.68);
+      color: rgba(16,22,46,.62);
       cursor: pointer;
       transition:
         background 150ms ease,
         color 150ms ease,
-        box-shadow 200ms ease,
-        transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1);
+        transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1),
+        box-shadow 180ms ease;
     }
-    .bar button:hover { background: rgba(255,255,255,0.085); color: #fff; transform: translateY(-1px); }
-    .bar button:active { transform: scale(0.90); }
-    .bar button svg { width: 18px; height: 18px; display: block; }
+    .strip button:hover { background: rgba(16,22,46,.07); color: ${INK}; transform: translateY(-1px); }
+    .strip button:active { transform: scale(0.9); }
+    .strip button svg { width: 24px; height: 24px; display: block; }
 
-    .bar button.on {
-      background: linear-gradient(180deg, #8D70FF, #6C4DF2);
-      color: #fff;
-      box-shadow:
-        0 2px 14px rgba(124, 92, 255, 0.55),
-        inset 0 1px 0 rgba(255,255,255,0.28);
+    /* active tool: lifted pastel sticker, tinted by the current ink colour */
+    .strip button.on {
+      background: color-mix(in srgb, var(--ink-color, #c8452f) 26%, ${PAPER});
+      border: 2px solid ${INK};
+      color: ${INK};
+      transform: translateY(-7px) rotate(-2.5deg);
+      box-shadow: 2px 3px 0 rgba(16,22,46,.9);
+      width: 42px; height: 42px; border-radius: 8px;
     }
-    .bar button.on:hover { background: linear-gradient(180deg, #9379FF, #7354F6); transform: none; }
-    .bar button.on svg { animation: chalk-pop 340ms cubic-bezier(0.34, 1.8, 0.5, 1) both; }
+    .strip button.on:hover { transform: translateY(-8px) rotate(-2.5deg); }
+    .strip button.on svg { animation: chalk-pop 320ms cubic-bezier(0.34, 1.8, 0.5, 1) both; width: 25px; height: 25px; }
+    .strip button.on[data-tool="cursor"] { background: #fdf07f; }
     @keyframes chalk-pop {
       0%   { transform: scale(0.7) rotate(-8deg); }
-      55%  { transform: scale(1.22) rotate(3deg); }
-      100% { transform: scale(1.06) rotate(0deg); }
+      55%  { transform: scale(1.2) rotate(3deg); }
+      100% { transform: scale(1) rotate(0deg); }
     }
 
     .divider {
-      width: 1px; height: 21px;
-      background: rgba(255,255,255,0.10);
-      margin: 0 5px;
+      align-self: stretch; width: 0;
+      margin: 4px 8px;
+      border-left: 2px dotted rgba(16,22,46,.35);
       flex: none;
     }
 
-    .swatches { display: flex; align-items: center; gap: 8px; padding: 0 5px; }
+    .swatches { display: flex; align-items: center; gap: 9px; padding: 0 3px 8px; }
     .swatch {
       appearance: none; border: 0; padding: 0;
-      width: 19px !important; height: 19px !important;
-      border-radius: 50% !important;
+      width: 23px; height: 23px;
       cursor: pointer;
-      position: relative;
-      box-shadow: inset 0 0 0 1.2px rgba(255,255,255,0.22), inset 0 -2px 3px rgba(0,0,0,0.18);
+      box-shadow: inset 0 -2px 3px rgba(0,0,0,.18);
       transition: transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1), box-shadow 180ms ease;
     }
-    .swatch:hover { transform: scale(1.22); }
-    .swatch:active { transform: scale(1.02); }
+    .swatch:hover { transform: scale(1.2); }
+    .swatch:active { transform: scale(1); }
     .swatch.on {
-      animation: chalk-drop 380ms cubic-bezier(0.34, 1.7, 0.5, 1) both;
-      box-shadow:
-        inset 0 0 0 1.2px rgba(255,255,255,0.25),
-        0 0 0 2px rgba(21,21,26,0.95),
-        0 0 0 3.6px var(--sw),
-        0 0 14px var(--sw);
+      animation: chalk-drop 360ms cubic-bezier(0.34, 1.7, 0.5, 1) both;
+      box-shadow: inset 0 -2px 3px rgba(0,0,0,.18), 0 0 0 2px ${INK};
     }
     @keyframes chalk-drop {
       0%   { transform: scale(1); }
       55%  { transform: scale(1.35); }
-      100% { transform: scale(1.05); }
+      100% { transform: scale(1.15); }
     }
+    .swatch.on { transform: scale(1.15); }
 
-    /* tooltips */
-    .bar button::after {
+    /* tooltips — names only, paper style */
+    .strip button::after {
       content: attr(data-tip);
       position: absolute;
-      bottom: calc(100% + 11px); left: 50%;
-      transform: translate(-50%, 3px);
-      background: rgba(28, 28, 34, 0.97);
-      border: 1px solid rgba(255,255,255,0.09);
-      color: rgba(255,255,255,0.92);
-      font-size: 11.5px; font-weight: 500; letter-spacing: 0.1px;
+      bottom: calc(100% + 13px); left: 50%;
+      transform: translate(-50%, 3px) rotate(-1deg);
+      background: ${PAPER};
+      border: 2px solid ${INK};
+      color: ${INK};
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
       line-height: 1; white-space: nowrap;
-      padding: 6px 9px; border-radius: 8px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+      padding: 6px 9px; border-radius: 6px;
+      box-shadow: 2px 3px 0 rgba(16,22,46,.85);
       opacity: 0; pointer-events: none;
       transition: opacity 160ms ease, transform 160ms ease;
+      z-index: 5;
     }
-    .bar button:hover::after {
-      opacity: 1; transform: translate(-50%, 0);
+    .strip button:hover::after {
+      opacity: 1; transform: translate(-50%, 0) rotate(-1deg);
       transition-delay: 480ms;
     }
-    .bar-wrap.tips-below .bar button::after { bottom: auto; top: calc(100% + 11px); }
-    .bar-wrap.dragging .bar button::after { opacity: 0 !important; }
+    .bar-wrap.tips-below .strip button::after { bottom: auto; top: calc(100% + 13px); }
+    .bar-wrap.dragging .strip button::after { opacity: 0 !important; }
     .swatch::after { display: none; }
+
+    /* handwritten caption naming the active tool + colour */
+    .status {
+      margin-top: 9px;
+      pointer-events: none;
+      font-family: 'Segoe Print', 'Bradley Hand', 'Marker Felt', 'Comic Sans MS', cursive;
+      font-size: 13px; font-weight: 700;
+      color: rgba(16,22,46,.55);
+      text-shadow: 0 1px 0 rgba(255,253,242,.7);
+      transition: opacity 200ms ease;
+    }
 
     .toast {
       position: fixed; left: 50%; bottom: 30px; z-index: 4;
-      transform: translate(-50%, 10px);
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 15px;
-      border-radius: 13px;
-      background: rgba(21, 21, 26, 0.85);
-      backdrop-filter: blur(20px) saturate(1.5);
-      -webkit-backdrop-filter: blur(20px) saturate(1.5);
-      border: 1px solid rgba(255,255,255,0.11);
-      box-shadow: 0 12px 34px rgba(0,0,0,0.35);
-      color: rgba(255,255,255,0.94);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
-      font-size: 12.5px; font-weight: 500; letter-spacing: 0.1px;
+      transform: translate(-50%, 10px) rotate(-1deg);
+      display: flex; align-items: center; gap: 9px;
+      padding: 10px 16px;
+      background: ${PAPER};
+      border: 2px solid ${INK};
+      border-radius: 8px;
+      box-shadow: 3px 4px 0 rgba(16,22,46,.85), 0 12px 24px rgba(16,22,46,.18);
+      color: ${INK};
+      font-family: 'Segoe Print', 'Bradley Hand', 'Marker Felt', 'Comic Sans MS', cursive;
+      font-size: 13.5px; font-weight: 700;
       opacity: 0; pointer-events: none;
       transition: opacity 220ms ease, transform 220ms cubic-bezier(0.3, 1.4, 0.5, 1);
     }
-    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.show { opacity: 1; transform: translate(-50%, 0) rotate(-1deg); }
     .toast.capture-hide { visibility: hidden; }
-    .toast svg { width: 14px; height: 14px; }
+    .toast svg { width: 15px; height: 15px; }
 
     .flash {
       position: fixed; inset: 0; z-index: 2;
@@ -362,18 +367,6 @@
   function build() {
     if (built) return;
     built = true;
-
-    // @property inside a shadow stylesheet doesn't register the custom
-    // property, which would leave the aurora ring's conic-gradient invalid —
-    // register it document-wide so the angle actually interpolates
-    try {
-      CSS.registerProperty({
-        name: '--chalk-ang',
-        syntax: '<angle>',
-        initialValue: '0deg',
-        inherits: false,
-      });
-    } catch {} // already registered, or unsupported — the 0deg fallback holds
 
     host = document.createElement('chalk-overlay');
     host.style.cssText = `position:fixed;inset:0;z-index:${Z_INDEX};display:none;pointer-events:none;`;
@@ -399,32 +392,37 @@
     barWrap = document.createElement('div');
     barWrap.className = 'bar-wrap';
     barWrap.innerHTML = `
-      <div class="bar" part="bar">
-        <div class="logo" title="">${ICONS.logo}</div>
-        <button data-tool="cursor" data-tip="Interact · V">${ICONS.cursor}</button>
-        <button data-tool="pen" data-tip="Pen · P">${ICONS.pen}</button>
-        <button data-tool="highlighter" data-tip="Highlighter · H">${ICONS.highlighter}</button>
-        <button data-tool="arrow" data-tip="Arrow · A">${ICONS.arrow}</button>
-        <button data-tool="rect" data-tip="Rectangle · R">${ICONS.rect}</button>
-        <button data-tool="eraser" data-tip="Eraser · E">${ICONS.eraser}</button>
-        <div class="divider"></div>
-        <div class="swatches">
-          ${COLORS.map(
-            (c, i) =>
-              `<button class="swatch" data-color="${c.value}" data-tip="${c.name} · ${i + 1}" style="--sw:${c.value};background:${c.value}"></button>`
-          ).join('')}
+      <div class="paper">
+        <div class="tape l"></div>
+        <div class="tape r"></div>
+        <div class="strip">
+          <button data-tool="cursor" data-tip="observe">${ICONS.cursor}</button>
+          <button data-tool="pen" data-tip="pen">${ICONS.pen}</button>
+          <button data-tool="highlighter" data-tip="highlighter">${ICONS.highlighter}</button>
+          <button data-tool="arrow" data-tip="arrow">${ICONS.arrow}</button>
+          <button data-tool="rect" data-tip="rectangle">${ICONS.rect}</button>
+          <button data-tool="eraser" data-tip="eraser">${ICONS.eraser}</button>
+          <div class="divider"></div>
+          <div class="swatches">
+            ${COLORS.map(
+              (c, i) =>
+                `<button class="swatch" data-color="${c.value}" style="background:${c.value};border-radius:${BLOBS[i]}"></button>`
+            ).join('')}
+          </div>
+          <div class="divider"></div>
+          <button data-act="undo" data-tip="undo">${ICONS.undo}</button>
+          <button data-act="clear" data-tip="clear all">${ICONS.trash}</button>
+          <button data-act="snapshot" data-tip="save snapshot">${ICONS.camera}</button>
+          <button data-act="close" data-tip="done">${ICONS.close}</button>
         </div>
-        <div class="divider"></div>
-        <button data-act="undo" data-tip="Undo · ${MOD_LABEL}Z">${ICONS.undo}</button>
-        <button data-act="clear" data-tip="Clear all">${ICONS.trash}</button>
-        <button data-act="snapshot" data-tip="Save snapshot">${ICONS.camera}</button>
-        <div class="divider"></div>
-        <button data-act="close" data-tip="Done · Esc">${ICONS.close}</button>
-      </div>`;
+      </div>
+      <div class="status"></div>`;
     shadow.appendChild(barWrap);
-    bar = barWrap.querySelector('.bar');
+    paper = barWrap.querySelector('.paper');
+    strip = barWrap.querySelector('.strip');
+    statusEl = barWrap.querySelector('.status');
     // stagger indices for the entrance animation
-    Array.from(bar.children).forEach((el, i) => el.style.setProperty('--i', i));
+    Array.from(strip.children).forEach((el, i) => el.style.setProperty('--i', i));
 
     toastEl = document.createElement('div');
     toastEl.className = 'toast';
@@ -449,7 +447,7 @@
     ensureCanvasSize();
 
     const prefs = await loadPrefs();
-    if (prefs.tool && bar.querySelector(`[data-tool="${prefs.tool}"]`)) tool = prefs.tool;
+    if (prefs.tool && strip.querySelector(`[data-tool="${prefs.tool}"]`)) tool = prefs.tool;
     if (prefs.color && COLORS.some((c) => c.value === prefs.color)) color = prefs.color;
     if (tool === 'cursor') tool = 'pen'; // activation means "I want to draw"
 
@@ -457,9 +455,9 @@
     barWrap.classList.remove('leaving');
     // retrigger the entrance animations
     barWrap.classList.remove('enter');
-    bar.style.animation = 'none';
-    void bar.offsetWidth;
-    bar.style.animation = '';
+    paper.style.animation = 'none';
+    void paper.offsetWidth;
+    paper.style.animation = '';
     barWrap.classList.add('enter');
 
     reflectTool();
@@ -508,7 +506,7 @@
         redoStack = [];
         rebuildBase();
         render();
-        if (active) toast(`<span>New page — drawings cleared</span>`);
+        if (active) toast(`<span>new page — drawings cleared</span>`);
       }
     };
     window.addEventListener('popstate', check);
@@ -872,27 +870,38 @@
   }
 
   // -------------------------------------------------------------- toolbar
+  function statusText() {
+    const name = TOOL_NAMES[tool] || tool;
+    if (tool === 'cursor') return 'observing — ink stays put';
+    if (tool === 'eraser') return 'eraser';
+    const c = COLORS.find((c) => c.value === color);
+    return `${name} · ${c ? c.name : ''}`;
+  }
+
   function reflectTool() {
-    for (const b of bar.querySelectorAll('[data-tool]')) {
+    for (const b of strip.querySelectorAll('[data-tool]')) {
       b.classList.toggle('on', b.dataset.tool === tool);
     }
-    // the cursor tool lets pointer events fall through to the page, so the
+    // the observe tool lets pointer events fall through to the page, so the
     // teacher can scroll and click while the ink stays on screen
     canvas.style.pointerEvents = tool === 'cursor' ? 'none' : 'auto';
     canvas.style.cursor = cursorFor(tool);
+    statusEl.textContent = statusText();
   }
 
   function reflectColor() {
-    for (const b of bar.querySelectorAll('[data-color]')) {
+    for (const b of strip.querySelectorAll('[data-color]')) {
       b.classList.toggle('on', b.dataset.color === color);
     }
+    barWrap.style.setProperty('--ink-color', color);
     if (tool === 'pen' || tool === 'highlighter') canvas.style.cursor = cursorFor(tool);
+    statusEl.textContent = statusText();
   }
 
   function setTool(t) {
     tool = t;
     reflectTool();
-    if (t !== 'cursor') savePrefs({ tool: t }); // never wake up in cursor mode
+    if (t !== 'cursor') savePrefs({ tool: t }); // never wake up in observe mode
   }
 
   function setColor(v) {
@@ -902,7 +911,7 @@
   }
 
   function wireToolbar() {
-    bar.addEventListener('click', (e) => {
+    strip.addEventListener('click', (e) => {
       const btn = e.target.closest('button');
       if (!btn) return;
       if (btn.dataset.tool) setTool(btn.dataset.tool);
@@ -913,7 +922,7 @@
       else if (btn.dataset.act === 'close') deactivate();
     });
     // keep clicks inside the toolbar from ever reaching the page
-    bar.addEventListener('pointerdown', (e) => e.stopPropagation());
+    paper.addEventListener('pointerdown', (e) => e.stopPropagation());
   }
 
   // ------------------------------------------------------------- dragging
@@ -927,13 +936,13 @@
         y = saved.y;
       } else {
         x = (window.innerWidth - bw) / 2;
-        y = window.innerHeight - bh - 26;
+        y = window.innerHeight - bh - 24;
       }
       x = clamp(x, 8, Math.max(8, window.innerWidth - bw - 8));
-      y = clamp(y, 8, Math.max(8, window.innerHeight - bh - 8));
+      y = clamp(y, 18, Math.max(18, window.innerHeight - bh - 8));
       barWrap.style.left = x + 'px';
       barWrap.style.top = y + 'px';
-      barWrap.classList.toggle('tips-below', y < 64);
+      barWrap.classList.toggle('tips-below', y < 72);
     });
   }
 
@@ -942,10 +951,10 @@
     const bw = barWrap.offsetWidth;
     const bh = barWrap.offsetHeight;
     const x = clamp(parseFloat(barWrap.style.left), 8, Math.max(8, window.innerWidth - bw - 8));
-    const y = clamp(parseFloat(barWrap.style.top), 8, Math.max(8, window.innerHeight - bh - 8));
+    const y = clamp(parseFloat(barWrap.style.top), 18, Math.max(18, window.innerHeight - bh - 8));
     barWrap.style.left = x + 'px';
     barWrap.style.top = y + 'px';
-    barWrap.classList.toggle('tips-below', y < 64);
+    barWrap.classList.toggle('tips-below', y < 72);
   }
 
   function wireDrag() {
@@ -953,26 +962,25 @@
     let offX = 0;
     let offY = 0;
 
-    bar.addEventListener('pointerdown', (e) => {
-      const onGrip = e.target.closest('.logo');
-      const onControl = e.target.closest('button');
-      if (!onGrip && (onControl || !e.target.closest('.bar'))) return;
-      if (e.button !== 0) return;
+    // drag by any empty spot on the paper (tape, gaps, dividers) — buttons
+    // and swatches keep their own behaviour
+    paper.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button') || e.button !== 0) return;
       dragging = true;
       const r = barWrap.getBoundingClientRect();
       offX = e.clientX - r.left;
       offY = e.clientY - r.top;
       barWrap.classList.add('dragging');
-      bar.setPointerCapture(e.pointerId);
+      paper.setPointerCapture(e.pointerId);
       e.preventDefault();
     });
 
-    bar.addEventListener('pointermove', (e) => {
+    paper.addEventListener('pointermove', (e) => {
       if (!dragging) return;
       const bw = barWrap.offsetWidth;
       const bh = barWrap.offsetHeight;
       const x = clamp(e.clientX - offX, 8, Math.max(8, window.innerWidth - bw - 8));
-      const y = clamp(e.clientY - offY, 8, Math.max(8, window.innerHeight - bh - 8));
+      const y = clamp(e.clientY - offY, 18, Math.max(18, window.innerHeight - bh - 8));
       barWrap.style.left = x + 'px';
       barWrap.style.top = y + 'px';
     });
@@ -983,11 +991,11 @@
       barWrap.classList.remove('dragging');
       const x = parseFloat(barWrap.style.left);
       const y = parseFloat(barWrap.style.top);
-      barWrap.classList.toggle('tips-below', y < 64);
+      barWrap.classList.toggle('tips-below', y < 72);
       savePrefs({ barPos: { x, y } });
     };
-    bar.addEventListener('pointerup', endDrag);
-    bar.addEventListener('pointercancel', endDrag);
+    paper.addEventListener('pointerup', endDrag);
+    paper.addEventListener('pointercancel', endDrag);
   }
 
   // ------------------------------------------------------------- keyboard
@@ -1007,7 +1015,7 @@
       deactivate();
       return;
     }
-    if (isEditable(document.activeElement)) return; // typing in the page (cursor mode)
+    if (isEditable(document.activeElement)) return; // typing in the page (observe mode)
     if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       e.stopPropagation();
@@ -1058,9 +1066,9 @@
       void flashEl.offsetWidth;
       flashEl.style.transition = '';
       flashEl.style.opacity = '0';
-      toast(`${ICONS.check}<span>Snapshot saved to Downloads</span>`);
+      toast(`${ICONS.check}<span>saved to Downloads</span>`);
     } else {
-      toast(`<span>Couldn’t save the snapshot</span>`);
+      toast(`<span>couldn’t save the snapshot</span>`);
     }
   }
 

@@ -5,7 +5,7 @@
 // Per-tab "active" state lives in the content script (which owns the overlay)
 // and is mirrored to the action badge on every change.
 
-const ACCENT = '#7C5CFF';
+const ACCENT = '#C8452F'; // notebook brick — matches the toolbar's ink accents
 
 // Pages Chrome will never let us touch.
 function isRestrictedUrl(url) {
