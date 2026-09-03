@@ -18,10 +18,13 @@
 // strokes keep a single clean alpha while drawn, undo/redo is exact, and a
 // viewport resize just replays the ops.
 //
-// Coordinates are DOCUMENT space (client + scroll at capture time) and the
-// replay transform subtracts the current scroll, so ink stays anchored to
-// the content it annotates while the page scrolls — which the observe tool
-// allows without leaving Chalk.
+// Coordinates are CONTENT space: client + the scroll offset of whatever
+// scrolls under the pen at capture time — the document, or an inner scroll
+// pane (chat apps, docs sites, IDEs). Each op remembers its anchor and the
+// replay transform subtracts that anchor's current scroll, so ink stays glued
+// to the content it annotates however the page moves. In drawing modes the
+// wheel is forwarded to the pane under the pointer, so you can scroll on and
+// keep annotating past the first screenful.
 
 (() => {
   'use strict';
@@ -63,6 +66,17 @@
   const PEN = { min: 2.0, max: 5.2, start: 3.4 };
   const SIZES = { highlighter: 16, eraser: 30, arrow: 3.5, rect: 3 };
   const HIGHLIGHTER_ALPHA = 0.38;
+  // stroke width levels — one setting, scaled per tool (the sizes above are
+  // "regular"); picked from the size dots or with [ and ]
+  const SIZE_LEVELS = [
+    { name: 'thin', scale: 0.55, dot: 4 },
+    { name: 'regular', scale: 1, dot: 7 },
+    { name: 'thick', scale: 1.8, dot: 11 },
+    { name: 'heavy', scale: 2.8, dot: 15 },
+  ];
+  // scroll panes smaller than this share of the viewport (list boxes, code
+  // blocks) are not worth anchoring ink to — the next pane up wins
+  const MIN_ANCHOR_AREA = 0.2;
 
   // ---------------------------------------------------------------- state
   let built = false;
@@ -70,6 +84,7 @@
   let tool = 'pen';
   let compact = true; // start compressed — cursor / pen / eraser only
   let color = COLORS[0].value;
+  let size = 'regular';
   let ops = [];
   let redoStack = [];
   let live = null; // in-progress stroke
@@ -87,6 +102,8 @@
 
   // ------------------------------------------------------------- utilities
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const sizeScale = () => (SIZE_LEVELS.find((l) => l.name === size) || SIZE_LEVELS[1]).scale;
+  const toolSize = (t) => SIZES[t] * sizeScale();
 
   function send(msg) {
     try {
@@ -149,16 +166,22 @@
     if (theTool === 'cursor') return '';
     if (theTool === 'laser') return 'none'; // the glowing dot IS the cursor
     if (theTool === 'pen') {
-      const s = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="4.6" fill="${color}" stroke="white" stroke-width="1.6"/></svg>`;
-      return `${enc(s)} 8 8, crosshair`;
+      // the dot previews the current width
+      const r = clamp(PEN.start * sizeScale() * 1.35, 2.6, 14);
+      const c = Math.ceil(r + 2);
+      const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${c * 2}" height="${c * 2}"><circle cx="${c}" cy="${c}" r="${r}" fill="${color}" stroke="white" stroke-width="1.6"/></svg>`;
+      return `${enc(s)} ${c} ${c}, crosshair`;
     }
     if (theTool === 'highlighter') {
-      const s = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect x="2" y="6" width="16" height="8" rx="3" fill="${color}" fill-opacity="0.55" stroke="white" stroke-width="1.4"/></svg>`;
-      return `${enc(s)} 10 10, crosshair`;
+      const h = clamp(8 * sizeScale(), 5, 22);
+      const d = Math.ceil(h + 12);
+      const c = d / 2;
+      const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${d}" height="${d}"><rect x="2" y="${(c - h / 2).toFixed(1)}" width="${d - 4}" height="${h.toFixed(1)}" rx="3" fill="${color}" fill-opacity="0.55" stroke="white" stroke-width="1.4"/></svg>`;
+      return `${enc(s)} ${c} ${c}, crosshair`;
     }
     if (theTool === 'eraser') {
-      const d = SIZES.eraser + 4;
-      const r = SIZES.eraser / 2;
+      const d = toolSize('eraser') + 4;
+      const r = toolSize('eraser') / 2;
       const c = d / 2;
       const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${d}" height="${d}"><circle cx="${c}" cy="${c}" r="${r}" fill="rgba(255,255,255,0.12)" stroke="rgba(0,0,0,0.55)" stroke-width="1"/><circle cx="${c}" cy="${c}" r="${r - 1.4}" fill="none" stroke="white" stroke-width="1.4"/></svg>`;
       return `${enc(s)} ${c} ${c}, crosshair`;
@@ -301,6 +324,33 @@
     }
     .swatch.on { transform: scale(1.15); }
 
+    /* stroke width — a row of growing dots, the active one inked */
+    .sizes { display: flex; align-items: center; gap: 1px; padding: 0 2px 4px; }
+    .sizes > button {
+      position: relative;
+      appearance: none; border: 0; background: transparent; padding: 0;
+      width: 22px; height: 24px; flex: none;
+      display: grid; place-items: center;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 150ms ease, transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1);
+    }
+    .sizes > button i {
+      display: block;
+      width: var(--dot); height: var(--dot);
+      border-radius: 50%;
+      background: rgba(16,22,46,.42);
+      transition: background 150ms ease, transform 180ms cubic-bezier(0.34, 1.8, 0.5, 1);
+    }
+    .sizes > button:hover { background: rgba(16,22,46,.07); transform: translateY(-1px); }
+    .sizes > button:hover i { background: ${INK}; }
+    .sizes > button:active { transform: scale(0.9); }
+    .sizes > button.on i {
+      background: var(--ink-color, #c8452f);
+      box-shadow: 0 0 0 2px ${INK};
+      transform: scale(1.1);
+    }
+
     /* compressed mode — only cursor / pen / eraser (plus the active tool,
        whichever it is, so keyboard shortcuts never point at a hidden button) */
     .bar-wrap.compact .strip > [data-full] { display: none; }
@@ -309,7 +359,8 @@
     .bar-wrap:not(.compact) [data-act="expand"] .icon-more { display: none; }
 
     /* tooltips — names only, paper style */
-    .strip > button::after {
+    .strip > button::after,
+    .sizes > button::after {
       content: attr(data-tip);
       position: absolute;
       bottom: calc(100% + 10px); left: 50%;
@@ -326,12 +377,15 @@
       transition: opacity 160ms ease, transform 160ms ease;
       z-index: 5;
     }
-    .strip > button:hover::after {
+    .strip > button:hover::after,
+    .sizes > button:hover::after {
       opacity: 1; transform: translate(-50%, 0) rotate(-1deg);
       transition-delay: 480ms;
     }
-    .bar-wrap.tips-below .strip > button::after { bottom: auto; top: calc(100% + 10px); }
-    .bar-wrap.dragging .strip > button::after { opacity: 0 !important; }
+    .bar-wrap.tips-below .strip > button::after,
+    .bar-wrap.tips-below .sizes > button::after { bottom: auto; top: calc(100% + 10px); }
+    .bar-wrap.dragging .strip > button::after,
+    .bar-wrap.dragging .sizes > button::after { opacity: 0 !important; }
 
     /* handwritten caption naming the active tool + colour */
     .status {
@@ -415,6 +469,13 @@
                 `<button class="swatch" data-color="${c.value}" style="background:${c.value};border-radius:${BLOBS[i]}"></button>`
             ).join('')}
           </div>
+          <div class="divider" data-full></div>
+          <div class="sizes" data-full>
+            ${SIZE_LEVELS.map(
+              (l) =>
+                `<button class="size" data-size="${l.name}" data-tip="${l.name}" style="--dot:${l.dot}px"><i></i></button>`
+            ).join('')}
+          </div>
           <div class="divider"></div>
           <button data-act="undo" data-tip="undo" data-full>${ICONS.undo}</button>
           <button data-act="clear" data-tip="clear all" data-full>${ICONS.trash}</button>
@@ -441,7 +502,8 @@
     wireCanvas();
     wireDrag();
     window.addEventListener('resize', onResize);
-    window.addEventListener('scroll', onScroll, { passive: true });
+    // capture phase: scroll events don't bubble, and inner panes scroll too
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
     window.addEventListener('keydown', onKeyDown, true);
     watchPageChanges();
   }
@@ -456,6 +518,7 @@
     const prefs = await loadPrefs();
     if (prefs.tool && strip.querySelector(`[data-tool="${prefs.tool}"]`)) tool = prefs.tool;
     if (prefs.color && COLORS.some((c) => c.value === prefs.color)) color = prefs.color;
+    if (prefs.size && SIZE_LEVELS.some((l) => l.name === prefs.size)) size = prefs.size;
     if (tool === 'cursor') tool = 'pen'; // activation means "I want to draw"
     setCompact(prefs.compact !== false, false);
 
@@ -470,6 +533,7 @@
 
     reflectTool();
     reflectColor();
+    reflectSize();
     placeToolbar(prefs.barPos);
     rebuildBase();
     render();
@@ -560,19 +624,116 @@
     });
   }
 
-  // ------------------------------------------------------------- draw ops
-  // Ops are stored in document coordinates; this maps them to the viewport.
-  function xform(c) {
-    c.setTransform(dpr, 0, 0, dpr, -window.scrollX * dpr, -window.scrollY * dpr);
+  // --------------------------------------------------------- scroll anchors
+  // An anchor is whatever scrolls under the ink: null for the document, or
+  // an inner scroll pane. Each op keeps its own, so a note on a chat pane
+  // follows the chat while a note on the header stays on the header.
+  const anchors = new WeakMap(); // element → anchor, so ops share one per pane
+
+  function anchorFor(el) {
+    if (!el) return null;
+    let a = anchors.get(el);
+    if (!a) {
+      a = { el, last: { x: 0, y: 0 } };
+      anchors.set(el, a);
+    }
+    return a;
   }
 
-  function docPoint(e) {
-    return { x: e.clientX + window.scrollX, y: e.clientY + window.scrollY };
+  // the vector that turns a client point into a content point for an anchor
+  function scrollShift(anchor) {
+    if (!anchor) return { x: window.scrollX, y: window.scrollY };
+    const el = anchor.el;
+    if (!el.isConnected) return anchor.last; // pane is gone — freeze the ink where it was
+    const r = el.getBoundingClientRect();
+    anchor.last = { x: el.scrollLeft - r.left, y: el.scrollTop - r.top };
+    return anchor.last;
+  }
+
+  // hit-test the page beneath the canvas
+  function pageElementAt(x, y) {
+    const was = canvas.style.pointerEvents;
+    canvas.style.pointerEvents = 'none';
+    let el = null;
+    try {
+      el = document.elementFromPoint(x, y);
+      // descend through open shadow roots so a pane inside a web component counts
+      while (el && el.shadowRoot) {
+        const inner = el.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === el) break;
+        el = inner;
+      }
+    } catch {}
+    canvas.style.pointerEvents = was;
+    return el;
+  }
+
+  const parentOf = (el) => el.parentElement || (el.getRootNode && el.getRootNode().host) || null;
+  const OVERFLOW_SCROLLS = /auto|scroll|overlay/;
+
+  function scrollsInside(el) {
+    if (el === document.scrollingElement || el === document.documentElement) return false;
+    let cs;
+    try {
+      cs = getComputedStyle(el);
+    } catch {
+      return false;
+    }
+    const y = OVERFLOW_SCROLLS.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 1;
+    const x = OVERFLOW_SCROLLS.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1;
+    return { x, y };
+  }
+
+  // the pane ink drawn at (x, y) should follow: the nearest vertically
+  // scrolling ancestor big enough to matter; null means the document
+  function anchorAt(x, y) {
+    const minArea = MIN_ANCHOR_AREA * window.innerWidth * window.innerHeight;
+    for (let el = pageElementAt(x, y); el; el = parentOf(el)) {
+      const can = scrollsInside(el);
+      if (can && can.y && el.clientWidth * el.clientHeight >= minArea) return anchorFor(el);
+    }
+    return null;
+  }
+
+  // the pane a wheel event over (x, y) should move, mirroring the browser's
+  // own scroll chaining; null means let the document handle it natively
+  function scrollerFor(x, y, dx, dy) {
+    for (let el = pageElementAt(x, y); el; el = parentOf(el)) {
+      const can = scrollsInside(el);
+      if (!can) continue;
+      if (can.y && dy) {
+        if (dy < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1) return el;
+      }
+      if (can.x && dx) {
+        if (dx < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1) return el;
+      }
+    }
+    return null;
+  }
+
+  // ------------------------------------------------------------- draw ops
+  // Ops are stored in content coordinates; this maps them to the viewport,
+  // clipped to the pane they belong to so ink scrolled out of a chat pane
+  // doesn't wander over the header.
+  function xform(c, anchor) {
+    const s = scrollShift(anchor);
+    c.setTransform(dpr, 0, 0, dpr, -s.x * dpr, -s.y * dpr);
+    if (anchor && anchor.el.isConnected) {
+      const el = anchor.el;
+      c.beginPath();
+      c.rect(el.scrollLeft + el.clientLeft, el.scrollTop + el.clientTop, el.clientWidth, el.clientHeight);
+      c.clip();
+    }
+  }
+
+  function docPoint(e, anchor) {
+    const s = scrollShift(anchor);
+    return { x: e.clientX + s.x, y: e.clientY + s.y };
   }
 
   function drawOp(c, op) {
     c.save();
-    xform(c);
+    xform(c, op.anchor);
     c.lineCap = 'round';
     c.lineJoin = 'round';
 
@@ -857,29 +1018,62 @@
       }
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
-      const p = docPoint(e);
+      const anchor = anchorAt(e.clientX, e.clientY);
+      const p = docPoint(e, anchor);
+      const k = sizeScale();
 
       if (tool === 'pen') {
         live = {
           tool,
           color,
-          points: [{ x: p.x, y: p.y, w: PEN.start, t: e.timeStamp }],
+          anchor,
+          points: [{ x: p.x, y: p.y, w: PEN.start * k, t: e.timeStamp }],
         };
       } else if (tool === 'highlighter') {
-        live = { tool, color, size: SIZES.highlighter, points: [{ ...p }] };
+        live = { tool, color, anchor, size: toolSize('highlighter'), points: [{ ...p }] };
       } else if (tool === 'eraser') {
-        live = { tool, size: SIZES.eraser, points: [{ ...p }] };
+        live = { tool, anchor, size: toolSize('eraser'), points: [{ ...p }] };
         bctx.save();
-        xform(bctx);
+        xform(bctx, anchor);
         bctx.lineCap = 'round';
         bctx.lineJoin = 'round';
         drawEraserPath(bctx, live, 0);
         bctx.restore();
       } else {
-        live = { tool, color, size: SIZES[tool], start: { ...p }, end: { ...p } };
+        live = { tool, color, anchor, size: toolSize(tool), start: { ...p }, end: { ...p } };
       }
       scheduleRender();
     });
+
+    // In a drawing tool the canvas covers the page, so a wheel would only
+    // ever reach the document — and on chat apps, docs sites and IDEs the
+    // document doesn't scroll, an inner pane does. Find the pane under the
+    // pointer and scroll it ourselves; when it's the document, or the pane
+    // has run out, the native default takes over.
+    canvas.addEventListener(
+      'wheel',
+      (e) => {
+        if (!active || tool === 'cursor' || e.ctrlKey) return; // ctrl+wheel is zoom
+        let dx = e.deltaX;
+        let dy = e.deltaY;
+        if (e.deltaMode === 1) {
+          dx *= 16;
+          dy *= 16;
+        } else if (e.deltaMode === 2) {
+          dx *= window.innerWidth;
+          dy *= window.innerHeight;
+        }
+        if (e.shiftKey && !dx) {
+          dx = dy;
+          dy = 0;
+        }
+        const el = scrollerFor(e.clientX, e.clientY, dx, dy);
+        if (!el) return;
+        e.preventDefault();
+        el.scrollBy(dx, dy);
+      },
+      { passive: false }
+    );
 
     canvas.addEventListener('pointermove', (e) => {
       if (!active) return;
@@ -920,7 +1114,7 @@
   }
 
   function addLivePoint(e) {
-    const { x, y } = docPoint(e);
+    const { x, y } = docPoint(e, live.anchor);
     if (live.tool === 'pen') {
       const pts = live.points;
       const prev = pts[pts.length - 1];
@@ -929,7 +1123,8 @@
       if (dist < 0.6) return;
       // slow, deliberate strokes press wide; fast flicks thin out
       const speed = dist / dt; // px per ms
-      const target = PEN.max - (PEN.max - PEN.min) * clamp(speed / 1.4, 0, 1);
+      const k = sizeScale();
+      const target = (PEN.max - (PEN.max - PEN.min) * clamp(speed / 1.4, 0, 1)) * k;
       const w = prev.w + (target - prev.w) * 0.3;
       pts.push({ x, y, w, t: e.timeStamp || prev.t + dt });
     } else if (live.tool === 'highlighter') {
@@ -942,7 +1137,7 @@
       const from = live.points.length;
       live.points.push({ x, y });
       bctx.save();
-      xform(bctx);
+      xform(bctx, live.anchor);
       bctx.lineCap = 'round';
       bctx.lineJoin = 'round';
       drawEraserPath(bctx, live, from);
@@ -969,9 +1164,10 @@
     const name = TOOL_NAMES[tool] || tool;
     if (tool === 'cursor') return 'interacting — ink stays put';
     if (tool === 'laser') return 'observe — point at things';
-    if (tool === 'eraser') return 'eraser';
+    const sz = size === 'regular' ? '' : ` · ${size}`;
+    if (tool === 'eraser') return `eraser${sz}`;
     const c = COLORS.find((c) => c.value === color);
-    return `${name} · ${c ? c.name : ''}`;
+    return `${name} · ${c ? c.name : ''}${sz}`;
   }
 
   function reflectTool() {
@@ -1007,6 +1203,26 @@
     savePrefs({ color: v });
   }
 
+  function reflectSize() {
+    for (const b of strip.querySelectorAll('[data-size]')) {
+      b.classList.toggle('on', b.dataset.size === size);
+    }
+    if (tool !== 'cursor' && tool !== 'laser') canvas.style.cursor = cursorFor(tool);
+    statusEl.textContent = statusText();
+  }
+
+  function setSize(name) {
+    if (!SIZE_LEVELS.some((l) => l.name === name)) return;
+    size = name;
+    reflectSize();
+    savePrefs({ size: name });
+  }
+
+  function stepSize(delta) {
+    const i = SIZE_LEVELS.findIndex((l) => l.name === size);
+    setSize(SIZE_LEVELS[clamp(i + delta, 0, SIZE_LEVELS.length - 1)].name);
+  }
+
   function setCompact(v, save = true) {
     // growing/shrinking from the left edge would slide the bar out from under
     // the pointer, so pin the midpoint and let it change width around that
@@ -1030,6 +1246,7 @@
       if (!btn) return;
       if (btn.dataset.tool) setTool(btn.dataset.tool);
       else if (btn.dataset.color) setColor(btn.dataset.color);
+      else if (btn.dataset.size) setSize(btn.dataset.size);
       else if (btn.dataset.act === 'undo') undo();
       else if (btn.dataset.act === 'clear') clearAll();
       else if (btn.dataset.act === 'snapshot') snapshot();
@@ -1151,6 +1368,12 @@
       e.preventDefault();
       e.stopPropagation();
       setTool(toolKeys[k]);
+      return;
+    }
+    if (e.key === '[' || e.key === ']') {
+      e.preventDefault();
+      e.stopPropagation();
+      stepSize(e.key === '[' ? -1 : 1);
       return;
     }
     const idx = parseInt(e.key, 10);

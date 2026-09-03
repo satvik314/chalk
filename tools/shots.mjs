@@ -111,7 +111,7 @@ await prefs({ compact: false, tool: 'pen', color: '#c8452f', barPos: { x: 80, y:
 await toggle();
 await page.screenshot({
   path: join(OUT, 'toolbar.png'),
-  clip: { x: 72, y: 252, width: 616, height: 98 },
+  clip: { x: 72, y: 252, width: 730, height: 98 },
 });
 await key('Escape');
 await page.waitForTimeout(400);
