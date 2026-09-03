@@ -60,6 +60,7 @@ Requires Chrome 116+ (or any Chromium browser: Edge, Brave, Arc).
 | Toggle drawing mode | `Alt+D` / `⌥D`, or click the Chalk icon |
 | Tools | `V` interact · `O` observe (laser) · `P` pen · `H` highlighter · `A` arrow · `R` rectangle · `E` eraser |
 | Colors | `1`–`5`, or click a swatch |
+| Stroke width | The size dots (thin · regular · thick · heavy), or `[` / `]` |
 | Undo / redo | `Ctrl/⌘+Z` · `Ctrl/⌘+Shift+Z` |
 | Clear everything | Trash button (undoable) |
 | Save a snapshot | Camera button — the toolbar hides itself, then a PNG lands in `Downloads/Chalk/` |
@@ -67,9 +68,10 @@ Requires Chrome 116+ (or any Chromium browser: Edge, Brave, Arc).
 | Expand / compress | The `⋯` button |
 | Done | `Esc`, or the `✕` |
 
-Two behaviors worth knowing:
+Three behaviors worth knowing:
 
-- **`V` — interact.** Pointer events fall through to the page, so you can scroll, click and type while the ink stays on screen. The drawings are stored in document coordinates, so they stay stuck to the paragraph they were drawn on.
+- **Scrolling while you draw.** The wheel works in every tool. Chat apps, docs sites and IDEs scroll an inner pane rather than the page, so Chalk finds the pane under your pointer and scrolls that. Ink is anchored to whatever it was drawn on — the page, or that pane — so it rides along with the content, and you can scroll on and keep annotating the next screenful.
+- **`V` — interact.** Pointer events fall through to the page, so you can scroll, click and type while the ink stays stuck to the paragraph it was drawn on.
 - **`O` — observe.** A laser pointer with a fading trail; click for an expanding ring. Nothing is committed, so there's nothing to erase.
 
 Ink survives toggling the mode off and on. It clears itself when you navigate to a different page — including single-page-app route changes — so last page's scribbles never haunt the next one.
@@ -81,7 +83,7 @@ The whole extension is a service worker, a content script and a popup — about 
 1. **The toggle.** `background.js` is a deliberately stateless service worker: it can be killed and restarted at any moment, so the only thing it does is relay a toggle message to the tab and mirror the tab's reply onto the action badge (`ON`). Per-tab state lives with whoever owns the pixels — the content script.
 2. **The overlay.** `content/chalk.js` builds a full-viewport canvas and the toolbar inside a **closed shadow root** at the top of the z-index. Page CSS can't reach in, Chalk's CSS can't leak out. Until your first toggle the host is `display: none`, so an installed-but-idle Chalk is indistinguishable from no extension at all.
 3. **Vector ops, not pixels.** Committed work is a list of ops — strokes, shapes, eraser paths, clears — replayed onto an offscreen *base* canvas. The visible canvas is always `base + the stroke currently under your cursor`. That one decision buys exact undo/redo, a highlighter that keeps a single clean alpha instead of darkening where it overlaps itself, and a free redraw on resize.
-4. **Document-space coordinates.** Points are captured as `client + scroll` and the replay transform subtracts the current scroll, which is why ink stays glued to the content while the page moves under it.
+4. **Content-space coordinates.** Each op remembers what scrolls under it — the document, or the nearest inner scroll pane big enough to matter — and stores points as `client + that pane's scroll`. The replay transform subtracts the pane's current scroll and clips to its box, which is why ink stays glued to the content while the page (or the chat) moves under it. In drawing tools the canvas covers the page, so a wheel event is hit-tested through to the pane beneath and forwarded there, mirroring the browser's own scroll chaining.
 5. **Snapshots.** The toolbar adds a `capture-hide` class, waits two frames for it to actually paint, then asks the worker for `captureVisibleTab` and hands the data URL to the downloads API. You get the annotated page, not a photo of the tool.
 6. **Icons from code.** `tools/make-icons.mjs` renders the action icons — a supersampled signed-distance-field board with a tapered chalk swoosh — and encodes the PNGs by hand with zero dependencies. `node tools/make-icons.mjs` regenerates all four sizes.
 
@@ -92,7 +94,7 @@ The permissions are the smallest set that makes the above work, and Chalk sends 
 | Permission | Why |
 | --- | --- |
 | `activeTab`, `scripting` | Inject the overlay into the tab you're on (including tabs that were already open at install) |
-| `storage` | Remember your tool, color, toolbar position and compressed/expanded state |
+| `storage` | Remember your tool, color, stroke width, toolbar position and compressed/expanded state |
 | `downloads` | Save snapshots to `Downloads/Chalk/` |
 | `<all_urls>` | Draw on any site, since teaching happens anywhere |
 
